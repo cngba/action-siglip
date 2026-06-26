@@ -16,18 +16,12 @@ decord.bridge.set_bridge('torch')
 
 
 def main(args):
-    # Direct path configurations pointing to your local Kaggle dataset
-    kaggle_root = "C:\\Users\\CONG\\.cache\\kagglehub\\datasets\\matthewjansen\\ucf101-action-recognition\\versions\\4"
+    # Direct path configuration pointing to your local Kaggle dataset root folder
+    kaggle_root = r"C:\Users\CONG\.cache\kagglehub\datasets\matthewjansen\ucf101-action-recognition\versions\4"
     
-    # Handle both direct text-list placements and nested subfolders
-    if os.path.exists(os.path.join(kaggle_root, "UCF-101")):
-        base_dir = os.path.join(kaggle_root, "UCF-101")
-    else:
-        base_dir = kaggle_root
-
-    annotation_dir = os.path.join(base_dir, "ucfTrainTestlist")
-    if not os.path.exists(annotation_dir):
-        annotation_dir = base_dir 
+    # Since the CSV files and the train/val/test folders are located right inside the root:
+    base_dir = kaggle_root
+    annotation_dir = kaggle_root
 
     # Enforce a strict path validation check right away
     if not (os.path.exists(base_dir) and os.path.exists(annotation_dir)):
@@ -50,8 +44,14 @@ def main(args):
         annotation_dir=annotation_dir, 
         processor=processor, 
         num_frames=args.num_frames, 
-        mode='val'
+        mode='val'  # This reads val.csv and targets the val/ folder
     )
+
+    print(f"Validation Dataset Size: {len(val_dataset)}")
+    if len(val_dataset) == 0:
+        raise ValueError(
+            f"Dataset is empty! Check if 'val.csv' exists in {annotation_dir} and contains valid data columns."
+        )
 
     # Hard set to 0 on Windows ('nt') to reliably prevent multiprocessing SpawnErrors
     num_workers = 0 if os.name == 'nt' else 4
@@ -64,10 +64,10 @@ def main(args):
         num_workers=num_workers, 
         pin_memory=torch.cuda.is_available()
     )
-    print(f"Validation Dataset Size: {len(val_dataset)}")
     
     print("\nInitializing Level 1: Zero-Shot Baseline Model...")
     class_list = val_dataset.unique_labels 
+    print(f"Loaded {len(class_list)} unique classes.")
 
     model = Siglip2ZeroShotBaseline(
         model_name=model_name, 
@@ -99,10 +99,13 @@ def main(args):
         
             progress_bar.set_postfix({"Acc": f"{100 * correct / total:.2f}%"})
     
-    val_acc = 100 * correct / total
-    print(f"\n=======================================================")
-    print(f"Final Level 1 Zero-Shot Baseline Accuracy: {val_acc:.2f}%")
-    print(f"=======================================================")
+    if total == 0:
+        print("\nError: No samples were processed by the DataLoader loops.")
+    else:
+        val_acc = 100 * correct / total
+        print(f"\n=======================================================")
+        print(f"Final Level 1 Zero-Shot Baseline Accuracy: {val_acc:.2f}%")
+        print(f"=======================================================")
 
 
 if __name__ == "__main__":

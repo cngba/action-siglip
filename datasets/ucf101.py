@@ -1,4 +1,5 @@
 import os
+import csv
 import torch
 import random
 import numpy as np
@@ -12,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 class UCF101VideoDataset(Dataset):
     """
-    Custom Dataset for UCF101 Video Action Recognition.
+    Custom Dataset for UCF101 Video Action Recognition adapted for Kaggle CSV format.
     Reads videos using decord and generates SigLIP text prompts.
     """
     def __init__(
@@ -20,62 +21,77 @@ class UCF101VideoDataset(Dataset):
         base_dir: str,
         annotation_dir: str,
         processor,
-        split: int = 1,
+        split: int = 1,  # Note: split is largely ignored here as Kaggle provides a fixed train/val/test split
         mode: str = 'train',
         num_frames: int = 8,
     ):
         self.base_dir = base_dir
         self.annotation_dir = annotation_dir
         self.processor = processor
-        self.split = split
-        self.mode = mode
+        self.mode = mode if mode in ['train', 'val', 'test'] else 'train'
         self.num_frames = num_frames
         
-        self.class_to_id = self._load_class_mapping()
-        self.unique_labels = sorted(list(self.class_to_id.keys()))
+        # Determine the correct CSV file based on the mode
+        self.csv_path = os.path.join(self.annotation_dir, f'{self.mode}.csv')
+        if not os.path.exists(self.csv_path):
+            raise FileNotFoundError(f"Expected CSV file not found at: {self.csv_path}")
+
+        # Build class mappings dynamically from the CSV files
+        self.label_to_id, self.id_to_label = self._build_class_mappings()
+        self.unique_labels = sorted(list(self.label_to_id.keys()))
         
-        self.label_to_id = {label: i for i, label in enumerate(self.unique_labels)}
-        self.id_to_label = {i: label for label, i in self.label_to_id.items()}
-        
+        # Load the list of videos for the current split/mode
         self.video_list = self._load_split_list()
 
-    def _load_class_mapping(self):
-        classInd_path = os.path.join(self.annotation_dir, 'classInd.txt')
-        class_to_id = {}
-        with open(classInd_path, 'r') as f:
-            for line in f:
-                parts = line.strip().split()
-                if len(parts) == 2:
-                    class_id = int(parts[0]) - 1
-                    class_name = parts[1]
-                    class_to_id[class_name] = class_id
-        return class_to_id
+    def _build_class_mappings(self):
+        """Scans the CSV files to build a deterministic mapping of class strings to IDs."""
+        all_classes = set()
+        # Scan train, val, and test CSVs if they exist to ensure consistent class numbering
+        for mode in ['train', 'val', 'test']:
+            csv_p = os.path.join(self.annotation_dir, f'{mode}.csv')
+            if os.path.exists(csv_p):
+                with open(csv_p, 'r', encoding='utf-8') as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        # Handles common headers: 'label', 'class', or 'classname'
+                        label = row.get('label') or row.get('class') or row.get('classname')
+                        if label:
+                            all_classes.add(label.strip())
+                            
+        sorted_classes = sorted(list(all_classes))
+        label_to_id = {label: i for i, label in enumerate(sorted_classes)}
+        id_to_label = {i: label for label, i in label_to_id.items()}
+        
+        if not label_to_id:
+            logger.warning("No classes discovered in the CSV files. Checking folder names instead.")
+        
+        return label_to_id, id_to_label
 
     def _load_split_list(self):
+        """Loads video paths and maps their labels from the target CSV file."""
         video_list = []
-        if self.mode == 'train':
-            list_file = os.path.join(self.annotation_dir, f'trainlist0{self.split}.txt')
-            with open(list_file, 'r') as f:
-                for line in f:
-                    parts = line.strip().split()
-                    if len(parts) == 2:
-                        vid_path = parts[0]
-                        class_name = vid_path.split('/')[0]
-                        if class_name in self.class_to_id:
-                            label_id = self.label_to_id[class_name]
-                            video_list.append((vid_path, label_id))
-        else:
-            list_file = os.path.join(self.annotation_dir, f'testlist0{self.split}.txt')
-            with open(list_file, 'r') as f:
-                for line in f:
-                    vid_path = line.strip()
-                    if vid_path:
-                        class_name = vid_path.split('/')[0]
-                        if class_name in self.class_to_id:
-                            label_id = self.label_to_id[class_name]
-                            video_list.append((vid_path, label_id))
+        with open(self.csv_path, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                # Added row.get('clip_path') to perfectly match your Kaggle CSV headers
+                vid_path = (row.get('clip_path') or 
+                            row.get('path') or 
+                            row.get('filename') or 
+                            row.get('video_path'))
+                
+                label_str = row.get('label') or row.get('class') or row.get('classname')
+                
+                if vid_path and label_str:
+                    vid_path = vid_path.strip()
+                    label_str = label_str.strip()
+                    
+                    if label_str in self.label_to_id:
+                        label_id = self.label_to_id[label_str]
+                        video_list.append((vid_path, label_id))
+                        
+        logger.info(f"Successfully loaded {len(video_list)} videos for mode: {self.mode}")
         return video_list
-
+    
     def __len__(self):
         return len(self.video_list)
 
@@ -101,7 +117,13 @@ class UCF101VideoDataset(Dataset):
     def __getitem__(self, idx):
         vid_path, label_id = self.video_list[idx]
         label_str = self.id_to_label[label_id]
-        video_path = os.path.join(self.base_dir, vid_path)
+        
+        # 1. Clean the path strings and strip any leading slashes/backslashes
+        clean_vid_path = vid_path.lstrip('/').lstrip('\\')
+        
+        # 2. Convert slashes to match Windows/Linux OS and combine with base_dir
+        clean_vid_path = clean_vid_path.replace('/', os.sep).replace('\\', os.sep)
+        video_path = os.path.join(self.base_dir, clean_vid_path)
         
         try:
             vr = VideoReader(video_path, ctx=cpu(0))
@@ -110,7 +132,7 @@ class UCF101VideoDataset(Dataset):
             frames = vr.get_batch(frame_indices)
             frames_np = [frame.numpy() for frame in frames]
         except Exception as e:
-            # Generate actual dummy image numpy structures to prevent decord validation prints
+            # Generate dummy frame structure if video loading fails
             frames_np = [np.zeros((224, 224, 3), dtype=np.uint8) for _ in range(self.num_frames)]
 
         text_prompt = f"A video of a person performing {label_str}"
