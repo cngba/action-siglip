@@ -1,15 +1,74 @@
+# Level 3: The Temporal Bridge (Frozen Spatial Backbone + Trainable Local-Global Temporal Adapter)
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers import SiglipModel, AutoProcessor
 
-class Siglip2LinearProbeBaseline(nn.Module):
+class HybridTemporalEventAdapter(nn.Module):
     """
-    Level 2: Language-Guided Linear Probe (The "Sober" Baseline)
-    Vision: Frozen SigLIP + Trainable Temporal Module + Trainable Linear Layer.
+    Combines local chronological mechanics (Conv1D) and global structural 
+    dependencies (Multi-head Self-Attention) across the frame sequence.
+    """
+    def __init__(self, dim=768, num_heads=8, kernel_size=3, mlp_ratio=4):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(dim)
+
+        # Local temporal branch (captures neighboring frame variations)
+        self.local_conv = nn.Conv1d(
+            in_channels=dim,
+            out_channels=dim,
+            kernel_size=kernel_size,
+            padding=kernel_size // 2,
+            groups=dim
+        )
+
+        # Global temporal branch (captures non-adjacent sequential dependencies)
+        self.attn = nn.MultiheadAttention(
+            embed_dim=dim,
+            num_heads=num_heads,
+            batch_first=True
+        )
+
+        # Learnable sequence fusion parameters
+        self.alpha = nn.Parameter(torch.tensor(1.0))
+        self.beta = nn.Parameter(torch.tensor(1.0))
+
+        # Feed-Forward Network layer
+        hidden = dim * mlp_ratio
+        self.norm2 = nn.LayerNorm(dim)
+        self.ffn = nn.Sequential(
+            nn.Linear(dim, hidden),
+            nn.GELU(),
+            nn.Linear(hidden, dim)
+        )
+
+    def forward(self, x):
+        # x shape: (B, T, D)
+        z = self.norm1(x)
+
+        # 1. Process local dynamics
+        local = z.transpose(1, 2)
+        local = self.local_conv(local)
+        local = local.transpose(1, 2)
+
+        # 2. Process global dynamics
+        global_feat, _ = self.attn(z, z, z)
+
+        # 3. Residual Feature Fusion
+        h = x + self.alpha * local + self.beta * global_feat
+
+        # 4. FFN Processing block
+        y = h + self.ffn(self.norm2(h))
+        return y
+
+
+class Siglip2TemporalBridgeBaseline(nn.Module):
+    """
+    Level 3: The Temporal Bridge
+    Vision: Frozen SigLIP + Trainable Hybrid Temporal Event Adapter.
     Text: Frozen text encoder with a rigid, manual prompt ("A video of {class}").
-    Purpose: Learns a visual projection matrix and temporal sequence dynamics that adapt 
-             the video embeddings to align optimally with the frozen text encoder's space.
+    Purpose: Tracks chronological mechanics (like patterns over time) by routing 
+             frame sequences through local and global temporal branches before final matching.
     """
     def __init__(self, model_name="google/siglip2-base-patch16-224", class_names=None):
         super().__init__()
@@ -18,11 +77,11 @@ class Siglip2LinearProbeBaseline(nn.Module):
         
         self.class_names = class_names
         
-        # 1. Load full SigLIP model
+        # 1. Load full SigLIP model foundation
         self.model = SiglipModel.from_pretrained(model_name)
         self.processor = AutoProcessor.from_pretrained(model_name)
         
-        # 2. FREEZE the entire base model (Both Vision and Text towers)
+        # 2. FREEZE the entire foundational base model (Both Vision and Text towers)
         for param in self.model.parameters():
             param.requires_grad = False
             
@@ -36,30 +95,27 @@ class Siglip2LinearProbeBaseline(nn.Module):
                 embedding_dim = getattr(self.model.config.text_config, "hidden_size", 768)
         else:
             embedding_dim = getattr(self.model.config, "hidden_size", 768)
-
-        # 4. FULLY TRAINABLE TEMPORAL MODULE (Added as requested)
-        # Captures frame-by-frame structural motions and temporal sequence changes over time
-        self.temporal_module = nn.Sequential(
-            nn.Conv1d(
-                in_channels=embedding_dim, 
-                out_channels=embedding_dim, 
-                kernel_size=3, 
-                stride=1, 
-                padding=1
-            ),
-            nn.ReLU(),
-            nn.BatchNorm1d(embedding_dim)
-        )
         
-        # 5. TRAINABLE ADAPTER: Maps fused visual representations smoothly into text target matrices
-        self.video_adapter = nn.Linear(embedding_dim, embedding_dim)
+        # 4. THE ONLY TRAINABLE BLOCK FOR LEVEL 3: Explicitly isolated for full fine-tuning
+        self.temporal_adapter = HybridTemporalEventAdapter(dim=embedding_dim)
         
         # Pre-prepare rigid text prompts and cache placeholder structures
         self.prompts = [f"A video of {cls_name}" for cls_name in class_names]
         self._text_features = None 
+    
+    def train(self, mode: bool = True):
+        """Custom train mode enforcement to guarantee baseline isolation."""
+        super().train(mode)
+        if mode:
+            # Enforce that the heavy foundation backbone always behaves under eval constraints
+            # This locks LayerNorm states and turns off dropout in SigLIP
+            self.model.eval()
+            # Explicitly keep the baseline adapter active and training
+            self.temporal_adapter.train()
+        return self
 
     def _get_text_features(self, device):
-        """Encodes the manual prompts once and caches them securely."""
+        """Encodes the manual prompts once and caches them securely (remains completely frozen)."""
         if self._text_features is not None:
             return self._text_features
         
@@ -87,40 +143,34 @@ class Siglip2LinearProbeBaseline(nn.Module):
         B, T, C, H, W = pixel_values.shape
         device = pixel_values.device
         
-        # 1. Flatten B and T to map sequential frames through the 2D vision encoder
+        # 1. Flatten B and T to pass through the 2D vision encoder
         pixel_values = pixel_values.view(B * T, C, H, W)
         
-        # 2. Extract spatial sequence maps from the vision model backbone
+        # 2. Extract spatial sequence from frozen backbone
         vision_outputs = self.model.vision_model(pixel_values=pixel_values)
         spatial_sequence = vision_outputs.last_hidden_state  # (B*T, S, D)
         
-        # 3. Rebuild sequential feature dimension alignments
-        _, S, D = spatial_sequence.shape
-        spatial_sequence = spatial_sequence.view(B, T, S, D)
+        # 3. Pool spatially PER FRAME using SigLIP's attention head
+        # This converts each frame into a single descriptive 768-dim token
+        frame_features = self.model.vision_model.head(spatial_sequence)  # (B*T, D)
         
-        # 4. Pass spatial patches through standard pooled vision attention heads
-        flattened_spatial = spatial_sequence.view(B * T, S, D)
-        pooled_frames = self.model.vision_model.head(flattened_spatial)  # (B*T, D)
-        pooled_frames = pooled_frames.view(B, T, D)  # (B, T, D)
+        # 4. Unflatten time dimension to feed the temporal layout
+        frame_features = frame_features.view(B, T, -1)  # (B, T, D)
         
-        # 5. TEMPORAL MODULE PROCESSING (Fully Trainable):
-        # Transpose to (B, D, T) to satisfy PyTorch channel configurations for 1D convolutions
-        temporal_input = pooled_frames.transpose(1, 2)  # (B, D, T)
-        temporal_output = self.temporal_module(temporal_input)  # (B, D, T)
+        # 5. PASS THROUGH THE TRAINABLE ADAPTER (Level 3 fine-tuning)
+        # Learns cross-frame structural dependencies (chronological order)
+        video_features = self.temporal_adapter(frame_features)  # (B, T, D)
         
-        # Pool across the remaining temporal elements (T)
-        fused_video_features = temporal_output.mean(dim=-1)  # (B, D)
+        # 6. Aggregate temporal features into a single video vector via mean pooling
+        video_features = video_features.mean(dim=1)  # (B, D)
         
-        # 6. Pass through trainable task adapter
-        video_features = self.video_adapter(fused_video_features)  # (B, D)
-        
-        # 7. L2 Normalize video representations
+        # 7. L2 Normalize video features
         video_features = F.normalize(video_features, p=2, dim=-1)
         
-        # 8. Fetch frozen text target features
+        # 8. Fetch normalized frozen text features
         text_features = self._get_text_features(device)  # (Num_Classes, D)
         
-        # 9. Compute contrastive logits output using the SigLIP exponential scalar multiplier
+        # 9. Compute Logits using SigLIP's internal temperature scale
         logit_scale = self.model.logit_scale.exp()
         logits = (video_features @ text_features.T) * logit_scale  # (B, Num_Classes)
         

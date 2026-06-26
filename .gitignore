@@ -1,6 +1,7 @@
 # VSCode
 .vscode/
 checkpoint/
+checkpoints/
 logs/
 
 # Byte-compiled / optimized / DLL files
