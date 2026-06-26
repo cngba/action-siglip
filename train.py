@@ -13,14 +13,14 @@ from tqdm import tqdm
 os.environ["HF_HUB_OFFLINE"] = "1"
 
 from transformers import AutoProcessor
-from model import Siglip2TemporalBridgeBaseline
+from model import Siglip2LoRATemporalBridge
 from datasets import UCF101VideoDataset
 
 decord.bridge.set_bridge('torch')
 
 
 def setup_logging(output_dir):
-    """Sets up unified file and console logging while suppressing noisy dependencies."""
+    """Sets up unified file and console logging while suppressing noisy backend network tracking logs."""
     os.makedirs(output_dir, exist_ok=True)
     log_file = os.path.join(output_dir, "train_log.txt")
     
@@ -43,7 +43,8 @@ def setup_logging(output_dir):
 
 
 def train_one_epoch(model, dataloader, criterion, optimizer, device):
-    model.train()  # Activates baseline custom overrides (Freezes foundation backbone)
+    # Activates custom train override: model.model.eval() but locks hybrid adapter + LoRA to train
+    model.train()  
     
     running_loss = 0.0
     correct_1 = 0
@@ -56,12 +57,15 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device):
         
         optimizer.zero_grad()
         
+        # Forward pass through LoRA spatial layers and hybrid temporal branches
         logits = model(pixel_values)
         loss = criterion(logits, labels)
         
+        # Backward pass & optimization step
         loss.backward()
         optimizer.step()
         
+        # Track training logs
         running_loss += loss.item() * labels.size(0)
         _, predicted = torch.max(logits, 1)
         total += labels.size(0)
@@ -96,11 +100,11 @@ def validate(model, dataloader, criterion, device):
             running_loss += loss.item() * labels.size(0)
             total += labels.size(0)
             
-            # Top-1 Metric calculation
+            # --- Top-1 Acc ---
             _, predicted = torch.max(logits, 1)
             correct_1 += (predicted == labels).sum().item()
             
-            # Top-5 Metric calculation
+            # --- Top-5 Acc ---
             _, top5_predicted = torch.topk(logits, k=5, dim=1)
             correct_5 += (top5_predicted == labels.view(-1, 1)).sum().item()
             
@@ -118,7 +122,7 @@ def validate(model, dataloader, criterion, device):
 
 def main(args):
     setup_logging(args.output_dir)
-    logging.info("Starting Level 3: The Temporal Bridge Training Loop...")
+    logging.info("Starting Level 4: Parameter-Efficient Temporal Alignment Training...")
 
     kaggle_root = "C:\\Users\\CONG\\.cache\\kagglehub\\datasets\\matthewjansen\\ucf101-action-recognition\\versions\\4"
     base_dir = kaggle_root
@@ -145,13 +149,19 @@ def main(args):
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=num_workers, pin_memory=torch.cuda.is_available())
     
     class_list = train_dataset.unique_labels 
-    logging.info(f"Loaded {len(class_list)} classes. Initializing Temporal Bridge Model...")
+    logging.info(f"Loaded {len(class_list)} classes. Initializing LoRA + Temporal Bridge Model...")
     
-    model = Siglip2TemporalBridgeBaseline(model_name=model_name, class_names=class_list).to(device)        
+    # Instantiate the Level 4 model structure
+    model = Siglip2LoRATemporalBridge(
+        model_name=model_name, 
+        class_names=class_list,
+        lora_r=args.lora_r,
+        lora_alpha=args.lora_alpha
+    ).to(device)        
 
-    # Gather parameters that require gradients (only layers inside HybridTemporalEventAdapter)
+    # Crucial step: Gather only parameters requiring gradients (LoRA adapters + HybridTemporalEventAdapter)
     trainable_params = [p for p in model.parameters() if p.requires_grad]
-    logging.info(f"Trainable Tensors Count: {len(trainable_params)}")
+    logging.info(f"Total isolated Trainable Tensor layers: {len(trainable_params)}")
 
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.AdamW(trainable_params, lr=args.lr, weight_decay=args.weight_decay)
@@ -189,13 +199,17 @@ if __name__ == "__main__":
     import multiprocessing
     multiprocessing.freeze_support()
     
-    parser = argparse.ArgumentParser(description="Level 3 Training Pipeline")
+    parser = argparse.ArgumentParser(description="Level 4 Training Pipeline")
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch_size", type=int, default=4)
-    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate for the temporal module adaptation")
+    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate for LoRA weights and temporal tracking module")
     parser.add_argument("--weight_decay", type=float, default=1e-2)
     parser.add_argument("--num_frames", type=int, default=8)
     parser.add_argument("--output_dir", type=str, default="./checkpoints")
+    
+    # LoRA Hyperparameters configuration
+    parser.add_argument("--lora_r", type=int, default=4, help="Rank for low-rank visual spatial adapter layers")
+    parser.add_argument("--lora_alpha", type=float, default=8.0, help="Scaling factor coefficient for the LoRA update path")
     
     args = parser.parse_args()
     main(args)
