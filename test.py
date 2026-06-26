@@ -1,121 +1,127 @@
 import os
+import sys
 import argparse
+import logging
 import torch
-import cv2 
-import numpy as np
 from torch.utils.data import DataLoader
 import decord
 from tqdm import tqdm
 
 from transformers import AutoProcessor
-# Level 1 uses the Zero Shot Baseline model structure
-from model import Siglip2ZeroShotBaseline
+from model import Siglip2LinearProbeBaseline
 from datasets import UCF101VideoDataset
 
 decord.bridge.set_bridge('torch')
 
 
-def main(args):
-    # Direct path configuration pointing to your local Kaggle dataset root folder
-    kaggle_root = r"C:\Users\CONG\.cache\kagglehub\datasets\matthewjansen\ucf101-action-recognition\versions\4"
+def setup_logging(output_dir):
+    os.makedirs(output_dir, exist_ok=True)
+    log_file = os.path.join(output_dir, "evaluation_log.txt")
     
-    # Since the CSV files and the train/val/test folders are located right inside the root:
+    log_format = "%(asctime)s [%(levelname)s] %(message)s"
+    date_format = "%Y-%m-%d %H:%M:%S"
+    
+    logging.basicConfig(
+        level=logging.INFO,
+        format=log_format,
+        datefmt=date_format,
+        handlers=[
+            logging.FileHandler(log_file, mode='w', encoding='utf-8'),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+    return log_file
+
+
+def main(args):
+    log_file_path = setup_logging(args.output_dir)
+    logging.info(f"Logging initialized. All metrics saved to: {log_file_path}")
+
+    kaggle_root = "C:\\Users\\CONG\\.cache\\kagglehub\\datasets\\matthewjansen\\ucf101-action-recognition\\versions\\4"
     base_dir = kaggle_root
     annotation_dir = kaggle_root
 
-    # Enforce a strict path validation check right away
     if not (os.path.exists(base_dir) and os.path.exists(annotation_dir)):
-        raise FileNotFoundError(
-            f"Dataset paths could not be verified.\n"
-            f"Looking for base directory: {base_dir}\n"
-            f"Looking for annotations directory: {annotation_dir}"
-        )
+        err_msg = f"Dataset paths could not be verified at: {base_dir}"
+        logging.error(err_msg)
+        raise FileNotFoundError(err_msg)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    logging.info(f"Using evaluation device: {device}")
     
     model_name = "google/siglip2-base-patch16-224"
-    print("Loading processor...")
     processor = AutoProcessor.from_pretrained(model_name)
     
-    print("Setting up Evaluation Dataset and DataLoader...")
-    val_dataset = UCF101VideoDataset(
-        base_dir=base_dir, 
-        annotation_dir=annotation_dir, 
-        processor=processor, 
-        num_frames=args.num_frames, 
-        mode='val'  # This reads val.csv and targets the val/ folder
-    )
+    logging.info("Setting up Evaluation Dataset and DataLoader...")
+    val_dataset = UCF101VideoDataset(base_dir=base_dir, annotation_dir=annotation_dir, processor=processor, num_frames=args.num_frames, mode='val')
 
-    print(f"Validation Dataset Size: {len(val_dataset)}")
-    if len(val_dataset) == 0:
-        raise ValueError(
-            f"Dataset is empty! Check if 'val.csv' exists in {annotation_dir} and contains valid data columns."
-        )
-
-    # Hard set to 0 on Windows ('nt') to reliably prevent multiprocessing SpawnErrors
+    logging.info(f"Validation Dataset loaded. Size: {len(val_dataset)}")
     num_workers = 0 if os.name == 'nt' else 4
-    print(f"Data pipeline configured with num_workers={num_workers}")
 
-    val_loader = DataLoader(
-        val_dataset, 
-        batch_size=args.batch_size, 
-        shuffle=False, 
-        num_workers=num_workers, 
-        pin_memory=torch.cuda.is_available()
-    )
-    
-    print("\nInitializing Level 1: Zero-Shot Baseline Model...")
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=num_workers, pin_memory=torch.cuda.is_available())
     class_list = val_dataset.unique_labels 
-    print(f"Loaded {len(class_list)} unique classes.")
 
-    model = Siglip2ZeroShotBaseline(
-        model_name=model_name, 
-        class_names=class_list
-    ).to(device)        
+    model = Siglip2LinearProbeBaseline(model_name=model_name, class_names=class_list).to(device)        
 
     if args.resume and os.path.isfile(args.resume):
-        print(f"Loading weights from checkpoint {args.resume}...")
+        logging.info(f"Loading trained weights from: {args.resume}")
         checkpoint = torch.load(args.resume, map_location=device, weights_only=False)
         model.load_state_dict(checkpoint['model_state_dict'])
+        logging.info("Weights successfully loaded.")
+    else:
+        logging.warning("No valid checkpoint specified. Running raw random weights baseline!")
 
-    # --- LEVEL 1: ZERO-SHOT EVALUATION ---
-    print("\n--- Starting Level 1 Zero-Shot Evaluation (Silly Baseline) ---")
+    logging.info("Starting Evaluation Loop...")
     model.eval()
-    correct = 0
+    correct_1 = 0
+    correct_5 = 0
     total = 0
 
     with torch.no_grad():
-        progress_bar = tqdm(val_loader, desc="Evaluation")
+        progress_bar = tqdm(val_loader, desc="Evaluation Pipeline", file=sys.stdout)
         for batch in progress_bar:
             pixel_values = batch["pixel_values"].to(device)
             labels = batch["label_id"].to(device)
         
             logits = model(pixel_values)
-            
-            _, predicted = torch.max(logits, 1)
             total += labels.size(0)
-            correct += (predicted == labels).sum().item()
+            
+            # --- Top-1 Acc ---
+            _, predicted = torch.max(logits, 1)
+            correct_1 += (predicted == labels).sum().item()
+            
+            # --- Top-5 Acc ---
+            _, top5_predicted = torch.topk(logits, k=5, dim=1)
+            # Reshape label vector to match dimensions for alignment comparisons
+            correct_5 += (top5_predicted == labels.view(-1, 1)).sum().item()
         
-            progress_bar.set_postfix({"Acc": f"{100 * correct / total:.2f}%"})
+            progress_bar.set_postfix({
+                "Top-1": f"{100 * correct_1 / total:.2f}%",
+                "Top-5": f"{100 * correct_5 / total:.2f}%"
+            })
     
     if total == 0:
-        print("\nError: No samples were processed by the DataLoader loops.")
+        logging.error("No evaluation samples were processed.")
     else:
-        val_acc = 100 * correct / total
-        print(f"\n=======================================================")
-        print(f"Final Level 1 Zero-Shot Baseline Accuracy: {val_acc:.2f}%")
-        print(f"=======================================================")
+        val_acc1 = 100 * correct_1 / total
+        val_acc5 = 100 * correct_5 / total
+        logging.info("\n=======================================================")
+        logging.info(f"Final Level 2 Evaluation Summary:")
+        logging.info(f" -> Total Evaluated Clips: {total}")
+        logging.info(f" -> Top-1 Accuracy       : {val_acc1:.2f}% ({correct_1}/{total})")
+        logging.info(f" -> Top-5 Accuracy       : {val_acc5:.2f}% ({correct_5}/{total})")
+        logging.info("=======================================================")
 
 
 if __name__ == "__main__":
     import multiprocessing
     multiprocessing.freeze_support()
     
-    parser = argparse.ArgumentParser(description="Level 1 VideoSiglip2 Evaluation")
-    parser.add_argument("--resume", type=str, default=None, help="Path to checkpoint if parsing pre-saved parameter layers")
-    parser.add_argument("--num_frames", type=int, default=8, help="Number of frames sampled uniformly per video clip")
-    parser.add_argument("--batch_size", type=int, default=4, help="Data batch size tracking constraints")
+    parser = argparse.ArgumentParser(description="Level 2 Evaluation")
+    parser.add_argument("--resume", type=str, default="./checkpoints/best_model.pt")
+    parser.add_argument("--num_frames", type=int, default=8)
+    parser.add_argument("--batch_size", type=int, default=4)
+    parser.add_argument("--output_dir", type=str, default="./logs")
     
     args = parser.parse_args()
     main(args)
