@@ -1,215 +1,199 @@
+# Author: Cong
+# Streamlined Training Engine with Custom Profiling & Target Metrics Strategy
+# Adapted for Level 5 Dual-Tower LoRA and Hybrid Temporal Modeling
+
 import os
-import sys
 import argparse
-import logging
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
-import decord
 from tqdm import tqdm
-
-# Force Hugging Face to operate completely offline if files are already cached locally
-# os.environ["HF_HUB_OFFLINE"] = "1"
-
 from transformers import AutoProcessor
-from model import Siglip2LoRATemporalBridge
+
+try:
+    import wandb
+except ImportError:
+    wandb = None
+
+from model import Siglip2FullLoRATemporalBridge
 from datasets import UCF101VideoDataset
-
-decord.bridge.set_bridge('torch')
-
-
-def setup_logging(output_dir):
-    """Sets up unified file and console logging while suppressing noisy backend network tracking logs."""
-    os.makedirs(output_dir, exist_ok=True)
-    log_file = os.path.join(output_dir, "train_log.txt")
-    
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        handlers=[
-            logging.FileHandler(log_file, mode='w', encoding='utf-8'),
-            logging.StreamHandler(sys.stdout)
-        ]
-    )
-    
-    # Silence external network and configuration diagnostic alerts
-    logging.getLogger("urllib3").setLevel(logging.WARNING)
-    logging.getLogger("requests").setLevel(logging.WARNING)
-    logging.getLogger("transformers").setLevel(logging.WARNING)
-    logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
-    return log_file
+import test
 
 
-def train_one_epoch(model, dataloader, criterion, optimizer, device):
-    # Activates custom train override: model.model.eval() but locks hybrid adapter + LoRA to train
-    model.train()  
-    
+def run_train_epoch(epoch, model, dataloader, criterion, optimizer, device):
+    """Runs a single training epoch optimization pass."""
+    # Activates model.train() along with its level 5 inner overrides
+    model.train()
     running_loss = 0.0
-    correct_1 = 0
+    correct = 0
     total = 0
-    
-    progress_bar = tqdm(dataloader, desc="Training", file=sys.stdout)
+
+    progress_bar = tqdm(dataloader, desc=f"Training (Epoch {epoch})")
     for batch in progress_bar:
         pixel_values = batch["pixel_values"].to(device)
         labels = batch["label_id"].to(device)
         
-        optimizer.zero_grad()
-        
-        # Forward pass through LoRA spatial layers and hybrid temporal branches
         logits = model(pixel_values)
         loss = criterion(logits, labels)
         
-        # Backward pass & optimization step
+        optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         
-        # Track training logs
-        running_loss += loss.item() * labels.size(0)
+        running_loss += loss.item()
         _, predicted = torch.max(logits, 1)
         total += labels.size(0)
-        correct_1 += (predicted == labels).sum().item()
+        correct += (predicted == labels).sum().item()
         
         progress_bar.set_postfix({
             "Loss": f"{loss.item():.4f}", 
-            "Top-1": f"{100 * correct_1 / total:.2f}%"
+            "Acc": f"{100 * correct / total:.2f}%"
         })
         
-    epoch_loss = running_loss / total
-    epoch_acc1 = 100 * correct_1 / total
-    return epoch_loss, epoch_acc1
+    epoch_loss = running_loss / len(dataloader)
+    epoch_acc = 100 * correct / total
+    return epoch_loss, epoch_acc
 
 
-def validate(model, dataloader, criterion, device):
-    model.eval()
-    running_loss = 0.0
-    correct_1 = 0
-    correct_5 = 0
-    total = 0
+def main():
+    parser = argparse.ArgumentParser(description="Level 5 VideoSiglip2 Dual-Tower Co-Alignment Optimizer")
+    parser.add_argument("--num_epochs", type=int, default=10, help="Total training epochs loop ceiling")
+    parser.add_argument("--batch_size", type=int, default=4, help="Data layout pipeline constraints")
+    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate applied to trainable weights")
+    parser.add_argument("--weight_decay", type=float, default=1e-2, help="L2 weight normalization decay coefficient")
+    parser.add_argument("--num_frames", type=int, default=8, help="Uniformly sampled frames count")
+    parser.add_argument("--checkpoint_dir", type=str, default="./checkpoints", help="Target backup weights directory")
+    parser.add_argument("--resume", type=str, default=None, help="Path parameter state file to resume progress")
     
-    with torch.no_grad():
-        progress_bar = tqdm(dataloader, desc="Validation", file=sys.stdout)
-        for batch in progress_bar:
-            pixel_values = batch["pixel_values"].to(device)
-            labels = batch["label_id"].to(device)
-            
-            logits = model(pixel_values)
-            loss = criterion(logits, labels)
-            
-            running_loss += loss.item() * labels.size(0)
-            total += labels.size(0)
-            
-            # --- Top-1 Acc ---
-            _, predicted = torch.max(logits, 1)
-            correct_1 += (predicted == labels).sum().item()
-            
-            # --- Top-5 Acc ---
-            _, top5_predicted = torch.topk(logits, k=5, dim=1)
-            correct_5 += (top5_predicted == labels.view(-1, 1)).sum().item()
-            
-            progress_bar.set_postfix({
-                "Loss": f"{loss.item():.4f}", 
-                "Top-1": f"{100 * correct_1 / total:.2f}%",
-                "Top-5": f"{100 * correct_5 / total:.2f}%"
-            })
-            
-    val_loss = running_loss / total
-    val_acc1 = 100 * correct_1 / total
-    val_acc5 = 100 * correct_5 / total
-    return val_loss, val_acc1, val_acc5
+    # Level 5 custom parameter additions
+    parser.add_argument("--lora_r", type=int, default=4, help="Rank value configuration for adapter weights matrix blocks")
+    parser.add_argument("--lora_alpha", type=float, default=8.0, help="Scaling denominator coefficient for adapter layers mapping")
+    
+    args = parser.parse_args()
 
-
-def main(args):
-    setup_logging(args.output_dir)
-    logging.info("Starting Level 4: Parameter-Efficient Temporal Alignment Training...")
-
+    # Direct local environment mapping constraints configuration
     kaggle_root = "C:\\Users\\CONG\\.cache\\kagglehub\\datasets\\matthewjansen\\ucf101-action-recognition\\versions\\4"
     base_dir = kaggle_root
     annotation_dir = kaggle_root
 
-    if not (os.path.exists(base_dir) and os.path.exists(annotation_dir)):
-        err_msg = f"Dataset paths could not be verified at: {base_dir}"
-        logging.error(err_msg)
-        raise FileNotFoundError(err_msg)
+    # Enforce standard asset validation guards early
+    if not os.path.exists(base_dir):
+        raise FileNotFoundError(f"Missing core storage index alignment folder metadata at: {base_dir}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logging.info(f"Using device: {device}")
-    
+    print(f"Executing optimization loop target context device state: {device}")
+
     model_name = "google/siglip2-base-patch16-224"
-    logging.info("Loading baseline processor components...")
     processor = AutoProcessor.from_pretrained(model_name)
-    
-    logging.info("Setting up Datasets...")
-    train_dataset = UCF101VideoDataset(base_dir=base_dir, annotation_dir=annotation_dir, processor=processor, num_frames=args.num_frames, mode='train')
-    val_dataset = UCF101VideoDataset(base_dir=base_dir, annotation_dir=annotation_dir, processor=processor, num_frames=args.num_frames, mode='val')
+
+    # Initialize W&B Experimentation Management Pipeline tracking targets
+    if wandb is not None:
+        wandb.init(
+            project="action-siglip",
+            name="level-5-co-alignment",
+            config=vars(args)
+        )
+
+    print("Setting up Training Split and Data Loaders pipeline configurations...")
+    train_dataset = UCF101VideoDataset(
+        base_dir=base_dir,
+        annotation_dir=annotation_dir,
+        processor=processor,
+        num_frames=args.num_frames,
+        mode='train'
+    )
+    val_dataset = UCF101VideoDataset(
+        base_dir=base_dir,
+        annotation_dir=annotation_dir,
+        processor=processor,
+        num_frames=args.num_frames,
+        mode='val'
+    )
 
     num_workers = 0 if os.name == 'nt' else 4
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=num_workers, pin_memory=torch.cuda.is_available())
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=num_workers, pin_memory=torch.cuda.is_available())
-    
-    class_list = train_dataset.unique_labels 
-    logging.info(f"Loaded {len(class_list)} classes. Initializing LoRA + Temporal Bridge Model...")
-    
-    # Instantiate the Level 4 model structure
-    model = Siglip2LoRATemporalBridge(
-        model_name=model_name, 
-        class_names=class_list,
+
+    class_names_list = train_dataset.unique_labels
+    print(f"Extracted unique tokens count elements targets: {len(class_names_list)}")
+
+    # Instantiate Level 5 Custom Architecture Modality
+    model = Siglip2FullLoRATemporalBridge(
+        model_name=model_name,
+        class_names=class_names_list,
         lora_r=args.lora_r,
         lora_alpha=args.lora_alpha
-    ).to(device)        
+    ).to(device)
 
-    # Crucial step: Gather only parameters requiring gradients (LoRA adapters + HybridTemporalEventAdapter)
+    # Isolate parameters matching gradient conditions (LoRA Text, LoRA Vision, Hybrid Temporal Module)
     trainable_params = [p for p in model.parameters() if p.requires_grad]
-    logging.info(f"Total isolated Trainable Tensor layers: {len(trainable_params)}")
+    print(f"Active Trainable Tensors layers identified for backpropagation processing: {len(trainable_params)}")
 
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.AdamW(trainable_params, lr=args.lr, weight_decay=args.weight_decay)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
 
-    best_val_acc1 = 0.0
+    os.makedirs(args.checkpoint_dir, exist_ok=True)
+    start_epoch = 1
+    best_val_acc = 0.0
 
-    for epoch in range(1, args.epochs + 1):
-        logging.info(f"--- Epoch {epoch}/{args.epochs} ---")
+    # Resume capability layer tracking elements management
+    if args.resume and os.path.isfile(args.resume):
+        print(f"Restoring optimization execution checkpoint data state vectors from: {args.resume}")
+        checkpoint = torch.load(args.resume, map_location=device, weights_only=False)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        start_epoch = checkpoint['epoch'] + 1
+        best_val_acc = checkpoint.get('val_acc', 0.0)
+
+    # Core Training Sequence
+    for epoch in range(start_epoch, args.num_epochs + 1):
+        print(f"\n--- Starting Epoch {epoch}/{args.num_epochs} ---")
+        train_loss, train_acc = run_train_epoch(epoch, model, train_loader, criterion, optimizer, device)
         
-        train_loss, train_acc1 = train_one_epoch(model, train_loader, criterion, optimizer, device)
-        val_loss, val_acc1, val_acc5 = validate(model, val_loader, criterion, device)
+        # Validation Pass Output Metrics utilizing your target evaluation strategy script
+        metrics = test.validate(epoch, val_loader, model, device)
         
-        scheduler.step()
-        
-        logging.info(f"Epoch Summary -> Train Loss: {train_loss:.4f} | Train Top-1 Acc: {train_acc1:.2f}%")
-        logging.info(f"Epoch Summary -> Val Loss: {val_loss:.4f} | Val Top-1: {val_acc1:.2f}% | Val Top-5: {val_acc5:.2f}%")
-        
-        checkpoint = {
-            'epoch': epoch,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'val_acc1': val_acc1,
-            'val_acc5': val_acc5,
-        }
-        
-        torch.save(checkpoint, os.path.join(args.output_dir, "latest_checkpoint.pt"))
-        if val_acc1 > best_val_acc1:
-            best_val_acc1 = val_acc1
-            torch.save(checkpoint, os.path.join(args.output_dir, "best_model.pt"))
-            logging.info(f"Saved checkpoint high-score configuration: {best_val_acc1:.2f}% Top-1!")
+        # Console output tracks intermediate updates
+        print(f"Epoch Summary -> Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%")
+        print(f"Val Summary   -> Top-1: {metrics['top1']:.2f}% | Top-5: {metrics['top5']:.2f}% | F1: {metrics['f1']:.2f}%")
+
+        # Telemetry logs matching metric keys
+        if wandb is not None:
+            wandb.log({
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "train_acc": train_acc,
+                "val_top1": metrics["top1"],
+                "val_top5": metrics["top5"],
+                "val_f1": metrics["f1"]
+            })
+
+        # Multi-epoch structural saving cadence
+        if epoch % 2 == 0:
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'val_acc': metrics['top1']
+            }, os.path.join(args.checkpoint_dir, f"checkpoint_epoch_{epoch}.pt"))
+
+        # Track historical optimal model updates
+        if metrics['top1'] > best_val_acc:
+            best_val_acc = metrics['top1']
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'val_acc': best_val_acc
+            }, os.path.join(args.checkpoint_dir, "best_model.pt"))
+            print(f"New best model saved into check-points with validation score: {best_val_acc:.2f}%")
+
+    if wandb is not None:
+        wandb.finish()
 
 
 if __name__ == "__main__":
     import multiprocessing
     multiprocessing.freeze_support()
-    
-    parser = argparse.ArgumentParser(description="Level 4 Training Pipeline")
-    parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--batch_size", type=int, default=4)
-    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate for LoRA weights and temporal tracking module")
-    parser.add_argument("--weight_decay", type=float, default=1e-2)
-    parser.add_argument("--num_frames", type=int, default=8)
-    parser.add_argument("--output_dir", type=str, default="./checkpoints")
-    
-    # LoRA Hyperparameters configuration
-    parser.add_argument("--lora_r", type=int, default=4, help="Rank for low-rank visual spatial adapter layers")
-    parser.add_argument("--lora_alpha", type=float, default=8.0, help="Scaling factor coefficient for the LoRA update path")
-    
-    args = parser.parse_args()
-    main(args)
+    main()
