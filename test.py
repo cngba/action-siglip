@@ -1,3 +1,4 @@
+# test.py
 # Author: Cong
 # Decoupled Inference Validation Script - Tracking Explicit Multi-Class Configurations
 # Optimized for Level 5 Dual-Tower Co-Alignment and Hybrid Temporal Bridge Performance
@@ -134,19 +135,20 @@ def validate(epoch, dataloader, model, device):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluation Target Script")
+    
+    # Modernized explicit text/video dataset arguments path alignments
+    parser.add_argument("--base_dir", type=str, default="/root/data/UCF-101", help="Path to extracted UCF101 video folders")
+    parser.add_argument("--annotation_dir", type=str, default="/root/data/ucfTrainTestlist", help="Path to UCF101 train/test split .txt files")
+    parser.add_argument("--split", type=int, default=1, help="Official UCF101 split to use (1, 2, or 3)")
+    
     parser.add_argument("--weights", type=str, default="./checkpoints/best_model.pt", help="Path to checkpoint state .pt file")
-    parser.add_argument("--batch_size", type=int, default=4, help="Batch sizing layer step processing constraint")
+    parser.add_argument("--batch_size", type=int, default=16, help="Batch sizing layer step processing constraint")
     parser.add_argument("--output_dir", type=str, default="./logs", help="Directory location where evaluations write")
     
     # LoRA hyperparameter variables tracking shapes dimensions alignments
-    parser.add_argument("--lora_r", type=int, default=4)
-    parser.add_argument("--lora_alpha", type=float, default=8.0)
+    parser.add_argument("--lora_r", type=int, default=8)
+    parser.add_argument("--lora_alpha", type=float, default=16.0)
     args = parser.parse_args()
-
-    # Local environment path configurations matching Windows kagglehub caching metrics structure
-    kaggle_root = "C:\\Users\\CONG\\.cache\\kagglehub\\datasets\\matthewjansen\\ucf101-action-recognition\\versions\\4"
-    base_dir = kaggle_root
-    annotation_dir = kaggle_root
 
     setup_logging(args.output_dir)
 
@@ -158,9 +160,10 @@ if __name__ == "__main__":
     
     logging.info("Constructing video datasets validation loader configurations...")
     val_dataset = UCF101VideoDataset(
-        base_dir=base_dir, 
-        annotation_dir=annotation_dir, 
+        base_dir=args.base_dir, 
+        annotation_dir=args.annotation_dir, 
         processor=processor, 
+        split=args.split,
         num_frames=8, 
         mode='val'
     )

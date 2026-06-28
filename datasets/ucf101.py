@@ -1,5 +1,5 @@
+# /root/action-siglip/datasets/ucf101.py
 import os
-import csv
 import torch
 import random
 import numpy as np
@@ -13,15 +13,14 @@ logger = logging.getLogger(__name__)
 
 class UCF101VideoDataset(Dataset):
     """
-    Custom Dataset for UCF101 Video Action Recognition adapted for Kaggle CSV format.
-    Reads videos using decord and generates SigLIP text prompts.
+    Custom Dataset for UCF101 Video Action Recognition adapted for official TXT splits.
     """
     def __init__(
         self,
         base_dir: str,
         annotation_dir: str,
         processor,
-        split: int = 1,  # Note: split is largely ignored here as Kaggle provides a fixed train/val/test split
+        split: int = 1,  
         mode: str = 'train',
         num_frames: int = 8,
     ):
@@ -30,73 +29,67 @@ class UCF101VideoDataset(Dataset):
         self.processor = processor
         self.mode = mode if mode in ['train', 'val', 'test'] else 'train'
         self.num_frames = num_frames
+        self.split = split
         
-        # Determine the correct CSV file based on the mode
-        self.csv_path = os.path.join(self.annotation_dir, f'{self.mode}.csv')
-        if not os.path.exists(self.csv_path):
-            raise FileNotFoundError(f"Expected CSV file not found at: {self.csv_path}")
-
-        # Build class mappings dynamically from the CSV files
+        # Build 0-indexed class mappings from classInd.txt
         self.label_to_id, self.id_to_label = self._build_class_mappings()
         self.unique_labels = sorted(list(self.label_to_id.keys()))
         
-        # Load the list of videos for the current split/mode
-        self.video_list = self._load_split_list()
+        # Load standard UCF101 splits
+        self.video_list = self._load_split()
 
     def _build_class_mappings(self):
-        """Scans the CSV files to build a deterministic mapping of class strings to IDs."""
-        all_classes = set()
-        # Scan train, val, and test CSVs if they exist to ensure consistent class numbering
-        for mode in ['train', 'val', 'test']:
-            csv_p = os.path.join(self.annotation_dir, f'{mode}.csv')
-            if os.path.exists(csv_p):
-                with open(csv_p, 'r', encoding='utf-8') as f:
-                    reader = csv.DictReader(f)
-                    for row in reader:
-                        # Handles common headers: 'label', 'class', or 'classname'
-                        label = row.get('label') or row.get('class') or row.get('classname')
-                        if label:
-                            all_classes.add(label.strip())
-                            
-        sorted_classes = sorted(list(all_classes))
-        label_to_id = {label: i for i, label in enumerate(sorted_classes)}
-        id_to_label = {i: label for label, i in label_to_id.items()}
+        """Scans classInd.txt to build mapping of class strings to 0-indexed IDs."""
+        class_ind_path = os.path.join(self.annotation_dir, 'classInd.txt')
+        label_to_id = {}
+        id_to_label = {}
         
-        if not label_to_id:
-            logger.warning("No classes discovered in the CSV files. Checking folder names instead.")
-        
+        if not os.path.exists(class_ind_path):
+            raise FileNotFoundError(f"Missing class definitions at: {class_ind_path}")
+
+        with open(class_ind_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) >= 2:
+                    # UCF101 standard is 1-indexed. PyTorch requires 0-indexed.
+                    idx = int(parts[0]) - 1
+                    label = parts[1]
+                    label_to_id[label] = idx
+                    id_to_label[idx] = label
+                    
         return label_to_id, id_to_label
 
-    def _load_split_list(self):
-        """Loads video paths and maps their labels from the target CSV file."""
+    def _load_split(self):
+        """Loads trainlist or testlist txt files based on mode."""
         video_list = []
-        with open(self.csv_path, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                # Added row.get('clip_path') to perfectly match your Kaggle CSV headers
-                vid_path = (row.get('clip_path') or 
-                            row.get('path') or 
-                            row.get('filename') or 
-                            row.get('video_path'))
+        prefix = 'train' if self.mode == 'train' else 'test'
+        list_file = os.path.join(self.annotation_dir, f'{prefix}list0{self.split}.txt')
+        
+        if not os.path.exists(list_file):
+            raise FileNotFoundError(f"Missing split file at: {list_file}")
+
+        with open(list_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
                 
-                label_str = row.get('label') or row.get('class') or row.get('classname')
+                # Split handles train lists (which have spaces and IDs) and test lists (which don't)
+                parts = line.split()
+                vid_path = parts[0]
                 
-                if vid_path and label_str:
-                    vid_path = vid_path.strip()
-                    label_str = label_str.strip()
-                    
-                    if label_str in self.label_to_id:
-                        label_id = self.label_to_id[label_str]
-                        video_list.append((vid_path, label_id))
-                        
-        logger.info(f"Successfully loaded {len(video_list)} videos for mode: {self.mode}")
+                # Extract the class name from the folder path (e.g., ApplyEyeMakeup/...)
+                class_name = vid_path.split('/')[0]
+                
+                if class_name in self.label_to_id:
+                    label_id = self.label_to_id[class_name]
+                    video_list.append((vid_path, label_id))
+
+        logger.info(f"Loaded {len(video_list)} videos for mode '{self.mode}' from split {self.split}.")
         return video_list
     
     def __len__(self):
         return len(self.video_list)
-
-    def _get_num_classes(self):
-        return len(self.unique_labels)
 
     def _get_frame_indices(self, total_frames: int):
         if total_frames <= self.num_frames:
@@ -118,10 +111,7 @@ class UCF101VideoDataset(Dataset):
         vid_path, label_id = self.video_list[idx]
         label_str = self.id_to_label[label_id]
         
-        # 1. Clean the path strings and strip any leading slashes/backslashes
         clean_vid_path = vid_path.lstrip('/').lstrip('\\')
-        
-        # 2. Convert slashes to match Windows/Linux OS and combine with base_dir
         clean_vid_path = clean_vid_path.replace('/', os.sep).replace('\\', os.sep)
         video_path = os.path.join(self.base_dir, clean_vid_path)
         
@@ -132,7 +122,6 @@ class UCF101VideoDataset(Dataset):
             frames = vr.get_batch(frame_indices)
             frames_np = [frame.numpy() for frame in frames]
         except Exception as e:
-            # Generate dummy frame structure if video loading fails
             frames_np = [np.zeros((224, 224, 3), dtype=np.uint8) for _ in range(self.num_frames)]
 
         text_prompt = f"A video of a person performing {label_str}"

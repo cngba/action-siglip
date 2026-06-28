@@ -1,3 +1,4 @@
+# train.py
 # Author: Cong
 # Streamlined Training Engine with Custom Profiling & Target Metrics Strategy
 # Adapted for Level 5 Dual-Tower LoRA and Hybrid Temporal Modeling
@@ -20,10 +21,8 @@ from model import Siglip2FullLoRATemporalBridge
 from datasets import UCF101VideoDataset
 import test
 
-
 def run_train_epoch(epoch, model, dataloader, criterion, optimizer, device):
     """Runs a single training epoch optimization pass."""
-    # Activates model.train() along with its level 5 inner overrides
     model.train()
     running_loss = 0.0
     correct = 0
@@ -58,28 +57,30 @@ def run_train_epoch(epoch, model, dataloader, criterion, optimizer, device):
 
 def main():
     parser = argparse.ArgumentParser(description="Level 5 VideoSiglip2 Dual-Tower Co-Alignment Optimizer")
-    parser.add_argument("--num_epochs", type=int, default=10, help="Total training epochs loop ceiling")
-    parser.add_argument("--batch_size", type=int, default=4, help="Data layout pipeline constraints")
-    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate applied to trainable weights")
+    
+    # Dataset path updates
+    parser.add_argument("--base_dir", type=str, default="/root/data/UCF-101", help="Path to extracted UCF101 video folders")
+    parser.add_argument("--annotation_dir", type=str, default="/root/data/ucfTrainTestlist", help="Path to UCF101 train/test split .txt files")
+    parser.add_argument("--split", type=int, default=1, help="Official UCF101 split to use (1, 2, or 3)")
+    
+    # Standard training params
+    parser.add_argument("--num_epochs", type=int, default=30, help="Total training epochs loop ceiling")
+    parser.add_argument("--batch_size", type=int, default=16, help="Data layout pipeline constraints")
+    parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate applied to trainable weights")
     parser.add_argument("--weight_decay", type=float, default=1e-2, help="L2 weight normalization decay coefficient")
     parser.add_argument("--num_frames", type=int, default=8, help="Uniformly sampled frames count")
     parser.add_argument("--checkpoint_dir", type=str, default="./checkpoints", help="Target backup weights directory")
     parser.add_argument("--resume", type=str, default=None, help="Path parameter state file to resume progress")
     
     # Level 5 custom parameter additions
-    parser.add_argument("--lora_r", type=int, default=4, help="Rank value configuration for adapter weights matrix blocks")
-    parser.add_argument("--lora_alpha", type=float, default=8.0, help="Scaling denominator coefficient for adapter layers mapping")
+    parser.add_argument("--lora_r", type=int, default=8, help="Rank value configuration for adapter weights matrix blocks")
+    parser.add_argument("--lora_alpha", type=float, default=16.0, help="Scaling denominator coefficient for adapter layers mapping")
     
     args = parser.parse_args()
 
-    # Direct local environment mapping constraints configuration
-    kaggle_root = "C:\\Users\\CONG\\.cache\\kagglehub\\datasets\\matthewjansen\\ucf101-action-recognition\\versions\\4"
-    base_dir = kaggle_root
-    annotation_dir = kaggle_root
-
     # Enforce standard asset validation guards early
-    if not os.path.exists(base_dir):
-        raise FileNotFoundError(f"Missing core storage index alignment folder metadata at: {base_dir}")
+    if not os.path.exists(args.annotation_dir):
+        raise FileNotFoundError(f"Missing core storage index alignment folder metadata at: {args.annotation_dir}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Executing optimization loop target context device state: {device}")
@@ -87,7 +88,6 @@ def main():
     model_name = "google/siglip2-base-patch16-224"
     processor = AutoProcessor.from_pretrained(model_name)
 
-    # Initialize W&B Experimentation Management Pipeline tracking targets
     if wandb is not None:
         wandb.init(
             project="action-siglip",
@@ -97,28 +97,29 @@ def main():
 
     print("Setting up Training Split and Data Loaders pipeline configurations...")
     train_dataset = UCF101VideoDataset(
-        base_dir=base_dir,
-        annotation_dir=annotation_dir,
+        base_dir=args.base_dir,
+        annotation_dir=args.annotation_dir,
         processor=processor,
+        split=args.split,
         num_frames=args.num_frames,
         mode='train'
     )
     val_dataset = UCF101VideoDataset(
-        base_dir=base_dir,
-        annotation_dir=annotation_dir,
+        base_dir=args.base_dir,
+        annotation_dir=args.annotation_dir,
         processor=processor,
+        split=args.split,
         num_frames=args.num_frames,
         mode='val'
     )
 
-    num_workers = 0 if os.name == 'nt' else 4
+    num_workers = 0 if os.name == 'nt' else 16
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=num_workers, pin_memory=torch.cuda.is_available())
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=num_workers, pin_memory=torch.cuda.is_available())
 
     class_names_list = train_dataset.unique_labels
     print(f"Extracted unique tokens count elements targets: {len(class_names_list)}")
 
-    # Instantiate Level 5 Custom Architecture Modality
     model = Siglip2FullLoRATemporalBridge(
         model_name=model_name,
         class_names=class_names_list,
@@ -126,7 +127,6 @@ def main():
         lora_alpha=args.lora_alpha
     ).to(device)
 
-    # Isolate parameters matching gradient conditions (LoRA Text, LoRA Vision, Hybrid Temporal Module)
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     print(f"Active Trainable Tensors layers identified for backpropagation processing: {len(trainable_params)}")
 
@@ -137,7 +137,6 @@ def main():
     start_epoch = 1
     best_val_acc = 0.0
 
-    # Resume capability layer tracking elements management
     if args.resume and os.path.isfile(args.resume):
         print(f"Restoring optimization execution checkpoint data state vectors from: {args.resume}")
         checkpoint = torch.load(args.resume, map_location=device, weights_only=False)
@@ -146,19 +145,15 @@ def main():
         start_epoch = checkpoint['epoch'] + 1
         best_val_acc = checkpoint.get('val_acc', 0.0)
 
-    # Core Training Sequence
     for epoch in range(start_epoch, args.num_epochs + 1):
         print(f"\n--- Starting Epoch {epoch}/{args.num_epochs} ---")
         train_loss, train_acc = run_train_epoch(epoch, model, train_loader, criterion, optimizer, device)
         
-        # Validation Pass Output Metrics utilizing your target evaluation strategy script
         metrics = test.validate(epoch, val_loader, model, device)
         
-        # Console output tracks intermediate updates
         print(f"Epoch Summary -> Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%")
         print(f"Val Summary   -> Top-1: {metrics['top1']:.2f}% | Top-5: {metrics['top5']:.2f}% | F1: {metrics['f1']:.2f}%")
 
-        # Telemetry logs matching metric keys
         if wandb is not None:
             wandb.log({
                 "epoch": epoch,
@@ -169,7 +164,6 @@ def main():
                 "val_f1": metrics["f1"]
             })
 
-        # Multi-epoch structural saving cadence
         if epoch % 2 == 0:
             torch.save({
                 'epoch': epoch,
@@ -178,7 +172,6 @@ def main():
                 'val_acc': metrics['top1']
             }, os.path.join(args.checkpoint_dir, f"checkpoint_epoch_{epoch}.pt"))
 
-        # Track historical optimal model updates
         if metrics['top1'] > best_val_acc:
             best_val_acc = metrics['top1']
             torch.save({
