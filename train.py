@@ -124,9 +124,9 @@ def main(args):
     setup_logging(args.output_dir)
     logging.info("Starting Level 4: Parameter-Efficient Temporal Alignment Training...")
 
-    kaggle_root = "C:\\Users\\CONG\\.cache\\kagglehub\\datasets\\matthewjansen\\ucf101-action-recognition\\versions\\4"
-    base_dir = kaggle_root
-    annotation_dir = kaggle_root
+    base_dir = "/root/data/UCF-101"
+    annotation_dir = "/root/data/ucfTrainTestlist"
+    split = 3
 
     if not (os.path.exists(base_dir) and os.path.exists(annotation_dir)):
         err_msg = f"Dataset paths could not be verified at: {base_dir}"
@@ -141,10 +141,10 @@ def main(args):
     processor = AutoProcessor.from_pretrained(model_name)
     
     logging.info("Setting up Datasets...")
-    train_dataset = UCF101VideoDataset(base_dir=base_dir, annotation_dir=annotation_dir, processor=processor, num_frames=args.num_frames, mode='train')
-    val_dataset = UCF101VideoDataset(base_dir=base_dir, annotation_dir=annotation_dir, processor=processor, num_frames=args.num_frames, mode='val')
+    train_dataset = UCF101VideoDataset(base_dir=base_dir, annotation_dir=annotation_dir, split=split, processor=processor, num_frames=args.num_frames, mode='train')
+    val_dataset = UCF101VideoDataset(base_dir=base_dir, annotation_dir=annotation_dir, split=split, processor=processor, num_frames=args.num_frames, mode='val')
 
-    num_workers = 0 if os.name == 'nt' else 4
+    num_workers = 0 if os.name == 'nt' else 16
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=num_workers, pin_memory=torch.cuda.is_available())
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=num_workers, pin_memory=torch.cuda.is_available())
     
@@ -200,9 +200,9 @@ if __name__ == "__main__":
     multiprocessing.freeze_support()
     
     parser = argparse.ArgumentParser(description="Level 4 Training Pipeline")
-    parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--batch_size", type=int, default=4)
-    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate for LoRA weights and temporal tracking module")
+    parser.add_argument("--epochs", type=int, default=20)
+    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate for LoRA weights and temporal tracking module")
     parser.add_argument("--weight_decay", type=float, default=1e-2)
     parser.add_argument("--num_frames", type=int, default=8)
     parser.add_argument("--output_dir", type=str, default="./checkpoints")

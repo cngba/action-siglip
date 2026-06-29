@@ -7,7 +7,7 @@ class LoRALinear(nn.Module):
     """
     Injects a Low-Rank Adaptation (LoRA) matrix side-by-side with a frozen linear layer.
     """
-    def __init__(self, original_linear: nn.Linear, r: int = 4, alpha: float = 8.0):
+    def __init__(self, original_linear: nn.Linear, r: int = 8, alpha: float = 8.0):
         super().__init__()
         self.original_linear = original_linear
         self.r = r
