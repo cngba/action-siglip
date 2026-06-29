@@ -17,11 +17,10 @@ decord.bridge.set_bridge('torch')
 
 def main(args):
     # Direct path configuration pointing to your local Kaggle dataset root folder
-    kaggle_root = r"C:\Users\CONG\.cache\kagglehub\datasets\matthewjansen\ucf101-action-recognition\versions\4"
     
     # Since the CSV files and the train/val/test folders are located right inside the root:
-    base_dir = kaggle_root
-    annotation_dir = kaggle_root
+    base_dir = "/root/data/UCF-101"
+    annotation_dir = "/root/data/ucfTrainTestlist"
 
     # Enforce a strict path validation check right away
     if not (os.path.exists(base_dir) and os.path.exists(annotation_dir)):
@@ -54,7 +53,7 @@ def main(args):
         )
 
     # Hard set to 0 on Windows ('nt') to reliably prevent multiprocessing SpawnErrors
-    num_workers = 0 if os.name == 'nt' else 4
+    num_workers = 0 if os.name == 'nt' else 16
     print(f"Data pipeline configured with num_workers={num_workers}")
 
     val_loader = DataLoader(
@@ -115,7 +114,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Level 1 VideoSiglip2 Evaluation")
     parser.add_argument("--resume", type=str, default=None, help="Path to checkpoint if parsing pre-saved parameter layers")
     parser.add_argument("--num_frames", type=int, default=8, help="Number of frames sampled uniformly per video clip")
-    parser.add_argument("--batch_size", type=int, default=4, help="Data batch size tracking constraints")
+    parser.add_argument("--batch_size", type=int, default=16, help="Data batch size tracking constraints")
     
     args = parser.parse_args()
     main(args)

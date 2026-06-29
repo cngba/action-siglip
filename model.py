@@ -13,7 +13,8 @@ class Siglip2ZeroShotBaseline(nn.Module):
         super().__init__()
         if class_names is None:
             raise ValueError("You must provide a list of class_names for zero-shot classification.")
-        
+        else: print("Class names received.")
+
         self.class_names = class_names
         
         # Load the full SigLIP model (contains both vision and text towers)
@@ -35,8 +36,6 @@ class Siglip2ZeroShotBaseline(nn.Module):
         if self._text_features is not None:
             return self._text_features
         
-        # Tokenize prompts using the HuggingFace processor
-        # FIX: Changed padding to "longest" and added truncation=True
         inputs = self.processor.tokenizer(
             text=self.prompts, 
             padding="longest", 
@@ -44,34 +43,48 @@ class Siglip2ZeroShotBaseline(nn.Module):
             return_tensors="pt"
         )
         input_ids = inputs["input_ids"].to(device)
-        
-        # FIX: Use .get() to safely handle the missing attention mask
         attention_mask = inputs.get("attention_mask")
         if attention_mask is not None:
             attention_mask = attention_mask.to(device)
-        # Pass through the frozen text encoder
-        text_outputs = self.model.text_model(input_ids=input_ids, attention_mask=attention_mask)
-        text_features = text_outputs.pooler_output  # (Num_Classes, D)
+            
+        # Extract features
+        text_outputs = self.model.get_text_features(
+            input_ids=input_ids, 
+            attention_mask=attention_mask
+        )
         
-        # L2 Normalize for cosine similarity matching
+        # --- SAFE TENSOR EXTRACTION ---
+        if hasattr(text_outputs, "pooler_output"):
+            text_features = text_outputs.pooler_output
+        elif hasattr(text_outputs, "text_embeds"):
+            text_features = text_outputs.text_embeds
+        else:
+            text_features = text_outputs
+        
         text_features = F.normalize(text_features, p=2, dim=-1)
         self._text_features = text_features
         return self._text_features
 
     def forward(self, pixel_values):
-        # pixel_values shape: (B, T, C, H, W)
         B, T, C, H, W = pixel_values.shape
         device = pixel_values.device
         
-        # 1. Flatten B and T to pass through the 2D vision encoder
+        # 1. Flatten B and T for the 2D encoder
         pixel_values = pixel_values.view(B * T, C, H, W)
         
-        # 2. Extract frame features
-        vision_outputs = self.model.vision_model(pixel_values=pixel_values)
-        frame_features = vision_outputs.pooler_output  # (B*T, D)
+        # 2. Extract features
+        vision_outputs = self.model.get_image_features(pixel_values=pixel_values)
         
+        # --- SAFE TENSOR EXTRACTION ---
+        if hasattr(vision_outputs, "pooler_output"):
+            frame_features = vision_outputs.pooler_output
+        elif hasattr(vision_outputs, "image_embeds"):
+            frame_features = vision_outputs.image_embeds
+        else:
+            frame_features = vision_outputs
+
         # 3. Late Fusion: Unflatten and Mean Pool across time (T)
-        frame_features = frame_features.view(B, T, -1)  # (B, T, D)
+        frame_features = frame_features.reshape(B, T, -1)  # (B, T, D)
         video_features = frame_features.mean(dim=1)     # (B, D)
         
         # 4. L2 Normalize video features
@@ -80,8 +93,7 @@ class Siglip2ZeroShotBaseline(nn.Module):
         # 5. Fetch normalized frozen text features
         text_features = self._get_text_features(device)  # (Num_Classes, D)
         
-        # 6. Compute Zero-Shot Logits via Cosine Similarity
-        # SigLIP uses a learnable logit_scale (temperature) to scale the dot product
+        # 6. Compute Logits
         logit_scale = self.model.logit_scale.exp()
         logits = (video_features @ text_features.T) * logit_scale  # (B, Num_Classes)
         
