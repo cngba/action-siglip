@@ -12,6 +12,7 @@ import argparse
 import logging
 import torch
 import numpy as np
+import random
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 from transformers import AutoProcessor
@@ -68,7 +69,10 @@ def validate(epoch, dataloader, model, device):
             labels = batch["label_id"].to(device)
             
             total_videos += labels.size(0)
-            logits = model(pixel_values)
+            
+            # RUN INFERENCE WITH MIXED PRECISION TO MATCH TRAINING SPEEDS
+            with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
+                logits = model(pixel_values)
             
             _, predicted = torch.max(logits, 1)
             all_preds.extend(predicted.cpu().numpy())
@@ -172,6 +176,13 @@ if __name__ == "__main__":
     setup_logging(os.path.dirname(config["log_file"]))
     logging.info(f"Loaded master configuration profile for evaluation mode: {args.mode}")
 
+    # Set seeds for validation reproducibility alignment
+    torch.manual_seed(config["seed"])
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(config["seed"])
+    random.seed(config["seed"])
+    np.random.seed(config["seed"])
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logging.info(f"Targeting active processing evaluation hardware context: {device}")
 
@@ -187,13 +198,24 @@ if __name__ == "__main__":
         mode='val'
     )
     
-    num_workers = 0 if os.name == 'nt' else config["num_workers"]
+    # SYSTEM BOUND WORKER CAPPING AND GENERATOR INITIALIZATION
+    g = torch.Generator()
+    g.manual_seed(config["seed"])
+
+    def worker_init_fn(worker_id):
+        worker_seed = torch.initial_seed() % 2**32
+        np.random.seed(worker_seed)
+        random.seed(worker_seed)
+
+    num_workers = min(config["num_workers"], os.cpu_count()) if os.name != 'nt' else 0
     val_loader = DataLoader(
         val_dataset, 
         batch_size=config["batch_size"], 
         shuffle=False, 
         num_workers=num_workers, 
-        pin_memory=torch.cuda.is_available()
+        pin_memory=torch.cuda.is_available(),
+        worker_init_fn=worker_init_fn,
+        generator=g
     )
 
     class_list = val_dataset.unique_labels
