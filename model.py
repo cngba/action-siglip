@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import contextlib
 from transformers import SiglipModel, AutoProcessor
 
 class LoRALinear(nn.Module):
@@ -192,7 +193,7 @@ class Siglip2FullLoRATemporalBridge(nn.Module):
                 if isinstance(m, LoRALinear):
                     m.train()
         return self
-        
+
     def _get_text_features(self, device):
         """Generates text features dynamically or returns cached versions during evaluation."""
         

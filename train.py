@@ -13,6 +13,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import shutil
+import random
+import numpy as np
 
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -141,9 +143,15 @@ def main():
         raise FileNotFoundError(f"Missing core storage index alignment folder metadata at: {config['annotation_dir']}")
 
     # Set seed for repeatability checks
+
+    random.seed(config["seed"])
+    np.random.seed(config["seed"])
     torch.manual_seed(config["seed"])
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(config["seed"])
+
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Executing optimization loop target context device state: {device}")
@@ -185,9 +193,23 @@ def main():
         mode='val'
     )
 
+    g = torch.Generator()
+    g.manual_seed(config["seed"])
+
+    def worker_init_fn(worker_id):
+        # Spreads a unique, non-overlapping seed sequence across all 8 parallel workers
+        worker_seed = torch.initial_seed() % 2**32
+        np.random.seed(worker_seed)
+        random.seed(worker_seed)
+
     num_workers = min(config["num_workers"], os.cpu_count()) if os.name != 'nt' else 0
-    train_loader = DataLoader(train_dataset, batch_size=config["batch_size"], shuffle=True, num_workers=num_workers, pin_memory=torch.cuda.is_available())
-    val_loader = DataLoader(val_dataset, batch_size=config["batch_size"], shuffle=False, num_workers=num_workers, pin_memory=torch.cuda.is_available())
+
+    train_loader = DataLoader(train_dataset, batch_size=config["batch_size"], shuffle=True, num_workers=num_workers, 
+    pin_memory=torch.cuda.is_available(), worker_init_fn=worker_init_fn, # <--- Pass it here
+        generator=g)
+    val_loader = DataLoader(val_dataset, batch_size=config["batch_size"], shuffle=False, num_workers=num_workers, 
+    pin_memory=torch.cuda.is_available(), worker_init_fn=worker_init_fn, # <--- Pass it here
+        generator=g)
 
     class_names_list = train_dataset.unique_labels
     logger.info(f"Extracted unique tokens count elements targets: {len(class_names_list)}")
