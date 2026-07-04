@@ -59,18 +59,20 @@ def run_train_epoch(epoch, model, dataloader, criterion, optimizer, scheduler, d
     correct = 0
     total = 0
 
+    scaler = torch.amp.GradScaler()
+
     progress_bar = tqdm(dataloader, desc=f"Training (Epoch {epoch})", file=sys.stdout)
     for batch in progress_bar:
         pixel_values = batch["pixel_values"].to(device)
         labels = batch["label_id"].to(device)
         
-        logits = model(pixel_values)
-        loss = criterion(logits, labels)
+        with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
+            logits = model(pixel_values)
+            loss = criterion(logits, labels)
         
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        scheduler.step()
         
         running_loss += loss.item()
         _, predicted = torch.max(logits, 1)
@@ -84,6 +86,8 @@ def run_train_epoch(epoch, model, dataloader, criterion, optimizer, scheduler, d
         
     epoch_loss = running_loss / len(dataloader)
     epoch_acc = 100 * correct / total
+
+    scheduler.step()
     return epoch_loss, epoch_acc
 
 
@@ -174,7 +178,7 @@ def main():
         mode='val'
     )
 
-    num_workers = 0 if os.name == 'nt' else config["num_workers"]
+    num_workers = min(config["num_workers"], os.cpu_count()) if os.name != 'nt' else 0
     train_loader = DataLoader(train_dataset, batch_size=config["batch_size"], shuffle=True, num_workers=num_workers, pin_memory=torch.cuda.is_available())
     val_loader = DataLoader(val_dataset, batch_size=config["batch_size"], shuffle=False, num_workers=num_workers, pin_memory=torch.cuda.is_available())
 
@@ -219,6 +223,11 @@ def main():
         checkpoint = torch.load(config["resume"], map_location=device, weights_only=False)
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+
+        if 'scheduler_state_dict' in checkpoint:
+            scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+            logger.info("Successfully restored learning rate scheduler state configuration.")
+
         start_epoch = checkpoint['epoch'] + 1
         best_val_acc = checkpoint.get('val_acc', 0.0)
 
@@ -231,9 +240,11 @@ def main():
         logger.info(f"Epoch Summary -> Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%")
         logger.info(f"Val Summary   -> Top-1: {metrics['top1']:.2f}% | Top-5: {metrics['top5']:.2f}% | F1: {metrics['f1']:.2f}%")
 
+        current_lr = optimizer.param_groups[0]['lr']
         if wandb is not None:
             wandb.log({
                 "epoch": epoch,
+                "lr": current_lr,
                 "train_loss": train_loss,
                 "train_acc": train_acc,
                 "val_top1": metrics["top1"],
@@ -246,6 +257,7 @@ def main():
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
                 'val_acc': metrics['top1']
             }, os.path.join(config["checkpoint_dir"], f"checkpoint_epoch_{epoch}.pt"))
 
@@ -255,6 +267,7 @@ def main():
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
                 'val_acc': best_val_acc
             }, os.path.join(config["checkpoint_dir"], "best_model.pt"))
             logger.info(f"New best model saved into check-points with validation score: {best_val_acc:.2f}%")

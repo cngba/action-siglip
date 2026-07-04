@@ -8,9 +8,9 @@ data:
   dataset: "ucf101"
   num_classes: 101
   num_segments: 8
-  annotation_path: "lists/ucf_labels.csv"
-  train_list: "/public/home/ock/video_clip/video-clip/lists/ucf101/train_rgb_split1.txt"
-  val_list: "/public/home/ock/video_clip/video-clip/lists/ucf101/val_rgb_split1.txt"
+  base_dir: "data/UCF-101"                 # Path to your actual video files folder
+  annotation_dir: "data/ucfTrainTestlist"   # Path to the folder containing the .txt list files
+  split: 1                                  # Target split number (matches trainlist01.txt / testlist01.txt)
   workers: 8
 
 # ==============================================================================
@@ -25,10 +25,10 @@ modes:
     num_epochs: 30
     lr: 5.e-5
     weight_decay: 0.01
-    # Architecture Switches
-    use_vision_lora: true
-    use_text_lora: true
-    use_temporal_adapter: true
+    # Architecture Switches (Corrected to match train.py runtime keys)
+    vision_lora: true
+    text_lora: true
+    temporal_module: true
     lora_r: 4
     lora_alpha: 8.0
 
@@ -41,9 +41,9 @@ modes:
     lr: 0.0
     weight_decay: 0.0
     # Architecture Switches (Turn everything off)
-    use_vision_lora: false
-    use_text_lora: false
-    use_temporal_adapter: false
+    vision_lora: false
+    text_lora: false
+    temporal_module: false
     lora_r: 0
     lora_alpha: 0.0
 
@@ -56,8 +56,8 @@ modes:
     lr: 1.e-4 # Higher LR works fine since only the tiny adapter is trained
     weight_decay: 0.01
     # Architecture Switches
-    use_vision_lora: false
-    use_text_lora: false
-    use_temporal_adapter: true
+    vision_lora: false
+    text_lora: false
+    temporal_module: true
     lora_r: 0
     lora_alpha: 0.0
