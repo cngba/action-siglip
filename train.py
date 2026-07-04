@@ -218,7 +218,13 @@ def main():
             logger.info(f"Trainable: {name} | Shape: {list(param.shape)}")
 
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.AdamW(trainable_params, lr=config["lr"], weight_decay=config["weight_decay"])
+    temporal_params = [p for n, p in model.named_parameters() if p.requires_grad and "temporal" in n]
+    lora_params = [p for n, p in model.named_parameters() if p.requires_grad and "lora" in n]
+
+    optimizer = optim.AdamW([
+        {"params": lora_params, "lr": config["lr"]},
+        {"params": temporal_params, "lr": config["lr"] * 2}  # Slightly higher for new weights
+    ], weight_decay=config["weight_decay"])
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config["num_epochs"])
 
     os.makedirs(config["checkpoint_dir"], exist_ok=True)
