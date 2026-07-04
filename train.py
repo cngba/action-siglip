@@ -165,6 +165,7 @@ def main():
             name=run_name,
             config=config
         )
+        wandb.watch(model, log="gradients", log_freq=100)
 
     logger.info("Setting up Training Split and Data Loaders pipeline configurations...")
     train_dataset = UCF101VideoDataset(

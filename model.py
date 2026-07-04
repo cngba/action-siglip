@@ -178,74 +178,60 @@ class Siglip2FullLoRATemporalBridge(nn.Module):
     def train(self, mode: bool = True):
         super().train(mode)
         if mode:
-            # Force foundational parameters (LayerNorms, original projections) into evaluation constraints
+            # Crucial: Reset eval cache so training updates text LoRA weights dynamically
+            self._cached_text_features = None 
+            
+            # Force foundational parameters into evaluation constraints
             self.model.eval()
             
             if self.temporal_adapter is not None:
                 self.temporal_adapter.train()
             
-            # Explicitly turn on training mode only for custom LoRALinear layers across both towers
+            # Explicitly turn on training mode only for custom LoRALinear layers
             for m in self.model.modules():
                 if isinstance(m, LoRALinear):
                     m.train()
         return self
-
-    def _get_text_features(self, device):
-        """Generates text features dynamically across prompt templates."""
-        num_classes = len(self.class_names)
-        num_templates = len(self.templates)
-
-        # OPTIMIZATION 1: If text LoRA is off, return the precomputed cache
-        if not self.use_text_lora:
-            if self._cached_text_features is not None:
-                return self._cached_text_features.to(device)
-            
-            # First-time setup: Compute once under no_grad and cache it forever
-            with torch.no_grad():
-                stacked_embeddings = []
-                for template in self.templates:
-                    prompts = [template.format(cls_name) for cls_name in self.class_names]
-                    inputs = self.processor.tokenizer(text=prompts, padding="longest", truncation=True, return_tensors="pt")
-                    
-                    text_outputs = self.model.text_model(
-                        input_ids=inputs["input_ids"].to(device), 
-                        attention_mask=inputs.get("attention_mask").to(device) if inputs.get("attention_mask") is not None else None
-                    )
-                    # Normalize embeddings before pooling them
-                    norm_features = F.normalize(text_outputs.pooler_output, p=2, dim=-1)
-                    stacked_embeddings.append(norm_features.cpu())
-                
-                # Mean ensemble aggregation across all templates
-                mean_features = torch.stack(stacked_embeddings, dim=0).mean(dim=0)
-                self._cached_text_features = F.normalize(mean_features, p=2, dim=-1)
-                
-            return self._cached_text_features.to(device)
         
-        # OPTIMIZATION 2: Dynamic generation when Text LoRA gradients are active
+    def _get_text_features(self, device):
+        """Generates text features dynamically or returns cached versions during evaluation."""
+        
+        # 1. EVAlUATION CACHING: Always return cache if available during eval mode
+        if not self.training and self._cached_text_features is not None:
+            return self._cached_text_features.to(device)
+            
+        # 2. STATIC TRAINING CACHING: If training but Text LoRA is frozen, we can also use cache
+        if self.training and not self.use_text_lora and self._cached_text_features is not None:
+            return self._cached_text_features.to(device)
+
+        # 3. COMPUTE EMBEDDINGS (Runs once for eval cache, or every batch if text LoRA is training)
         stacked_embeddings = []
         
-        # Loop over templates to gather features under the active graph tracking context
-        for template in self.templates:
-            prompts = [template.format(cls_name) for cls_name in self.class_names]
-            inputs = self.processor.tokenizer(text=prompts, padding="longest", truncation=True, return_tensors="pt")
-            
-            input_ids = inputs["input_ids"].to(device)
-            attention_mask = inputs.get("attention_mask")
-            if attention_mask is not None:
-                attention_mask = attention_mask.to(device)
-            
-            if self.use_text_lora and self.training:
+        # Wrap the entire generation context under no_grad if gradients aren't needed
+        context = torch.no_grad() if (not self.training or not self.use_text_lora) else contextlib.nullcontext()
+        
+        with context:
+            for template in self.templates:
+                prompts = [template.format(cls_name) for cls_name in self.class_names]
+                inputs = self.processor.tokenizer(text=prompts, padding="longest", truncation=True, return_tensors="pt")
+                
+                input_ids = inputs["input_ids"].to(device)
+                attention_mask = inputs.get("attention_mask")
+                if attention_mask is not None:
+                    attention_mask = attention_mask.to(device)
+                
                 text_outputs = self.model.text_model(input_ids=input_ids, attention_mask=attention_mask)
-            else:
-                with torch.no_grad():
-                    text_outputs = self.model.text_model(input_ids=input_ids, attention_mask=attention_mask)
+                norm_features = F.normalize(text_outputs.pooler_output, p=2, dim=-1)
+                stacked_embeddings.append(norm_features)
+                
+            mean_features = torch.stack(stacked_embeddings, dim=0).mean(dim=0)
+            text_features = F.normalize(mean_features, p=2, dim=-1)
+
+        # Cache the result if we are in validation/evaluation mode
+        if not self.training:
+            self._cached_text_features = text_features.cpu() # Store on CPU to save VRAM between epochs
+            return self._cached_text_features.to(device)
             
-            norm_features = F.normalize(text_outputs.pooler_output, p=2, dim=-1)
-            stacked_embeddings.append(norm_features)
-            
-        # Composite latent mean representation vector mapping
-        mean_features = torch.stack(stacked_embeddings, dim=0).mean(dim=0)
-        text_features = F.normalize(mean_features, p=2, dim=-1)
         return text_features
 
     def forward(self, pixel_values):
