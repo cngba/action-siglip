@@ -29,7 +29,7 @@ from model import Siglip2FullLoRATemporalBridge
 from datasets import UCF101VideoDataset
 import test
 
-def setup_logger(log_file="logs/sth.log"):
+def setup_logger(log_file):
     """Configures logging to record outputs to both a file and the console."""
     os.makedirs(os.path.dirname(log_file), exist_ok=True)
     
@@ -102,7 +102,6 @@ def run_train_epoch(epoch, model, dataloader, criterion, optimizer, scheduler, d
 def main():
     import datetime
     log_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    logger = setup_logger("logs/sth.log")
     
     # 1. Parse unified config options from CLI arguments
     parser = argparse.ArgumentParser(description="SigLIP 2 PEFT Ablation Engine")
@@ -135,6 +134,9 @@ def main():
     # 3. Dynamically merge current mode specific hyper-parameters onto the flat runtime dictionary
     mode_specific_config = raw_yaml["modes"][args.mode]
     config.update(mode_specific_config)
+    
+    target_log = config.get("log_file", f"logs/{args.mode}_{log_time}.log")
+    logger = setup_logger(target_log)
     
     logger.info(f"Successfully compiled configuration vectors for operational target matrix: {args.mode}")
 
@@ -173,7 +175,6 @@ def main():
             name=run_name,
             config=config
         )
-        wandb.watch(model, log="gradients", log_freq=100)
 
     logger.info("Setting up Training Split and Data Loaders pipeline configurations...")
     train_dataset = UCF101VideoDataset(
@@ -225,6 +226,9 @@ def main():
         use_temporal_adapter=config["temporal_module"]
     ).to(device)
 
+    if wandb is not None:
+        wandb.watch(model, log="gradients", log_freq=100)
+
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     if not trainable_params:
         if wandb is not None:
@@ -248,7 +252,7 @@ def main():
         {"params": lora_params, "lr": config["lr"]},
         {"params": temporal_params, "lr": config["lr"] * 2}  # Slightly higher for new weights
     ], weight_decay=config["weight_decay"])
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config["num_epochs"])
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.get("scheduler_t_max", config["num_epochs"]))
 
     os.makedirs(config["checkpoint_dir"], exist_ok=True)
     start_epoch = 1

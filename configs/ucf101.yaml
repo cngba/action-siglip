@@ -22,7 +22,7 @@ modes:
     checkpoint_dir: "./exp/siglip2_peft/ucf101/full_peft"
     log_file: "./exp/siglip2_peft/ucf101/full_peft/session.log"
     batch_size: 32
-    num_epochs: 10
+    num_epochs: 30
     lr: 5.e-5
     weight_decay: 0.01
     # Architecture Switches (Corrected to match train.py runtime keys)
