@@ -59,6 +59,7 @@ def run_train_epoch(epoch, model, dataloader, criterion, optimizer, scheduler, d
     correct = 0
     total = 0
 
+    # Initialize standard automatic mixed precision gradient scaler
     scaler = torch.amp.GradScaler()
 
     progress_bar = tqdm(dataloader, desc=f"Training (Epoch {epoch})", file=sys.stdout)
@@ -66,13 +67,17 @@ def run_train_epoch(epoch, model, dataloader, criterion, optimizer, scheduler, d
         pixel_values = batch["pixel_values"].to(device)
         labels = batch["label_id"].to(device)
         
+        optimizer.zero_grad()
+
+        # Forward pass with mixed precision
         with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
             logits = model(pixel_values)
             loss = criterion(logits, labels)
         
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        # Backward pass using the gradient scaler to prevent underflow
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
         
         running_loss += loss.item()
         _, predicted = torch.max(logits, 1)
@@ -87,6 +92,7 @@ def run_train_epoch(epoch, model, dataloader, criterion, optimizer, scheduler, d
     epoch_loss = running_loss / len(dataloader)
     epoch_acc = 100 * correct / total
 
+    # Step the learning rate scheduler once per epoch
     scheduler.step()
     return epoch_loss, epoch_acc
 
@@ -198,11 +204,12 @@ def main():
 
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     if not trainable_params:
-        logger.warning("No trainable parameters found!")
-        print("No trainable parameters found!. Please switch to test.py")
         if wandb is not None:
             wandb.finish()
-        return  # Gracefully exit the training script execution
+        raise ValueError(
+            f"No trainable parameters found for mode '{args.mode}'! "
+            f"train.py is strictly for training. For Zero-Shot evaluation, please use test.py instead."
+        )
     
     logger.info(f"Active Trainable Tensors layers identified for backpropagation processing: {len(trainable_params)}")
     logger.info("--- Parameter Audit Matrix Summary ---")

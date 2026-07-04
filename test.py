@@ -209,21 +209,27 @@ if __name__ == "__main__":
         use_temporal_adapter=config["temporal_module"]
     ).to(device)
 
-    # Determine weight checkpoint loading paths: user override check vs default run folder
-    checkpoint_target = args.weights if args.weights else os.path.join(config["checkpoint_dir"], "best_model.pt")
-    
     current_epoch = 0
-    if checkpoint_target and os.path.isfile(checkpoint_target):
-        logging.info(f"Loading checkpoint weights directly from: {checkpoint_target}")
-        checkpoint = torch.load(checkpoint_target, map_location=device, weights_only=False)
-        model.load_state_dict(checkpoint['model_state_dict'])
-        current_epoch = checkpoint.get('epoch', 0)
+
+    # Handle weight routing dynamically based on Zero-Shot vs Fine-Tuning modes
+    if args.mode == "zero_shot":
+        logging.info("Executing pure Zero-Shot baseline performance evaluation over vanilla pre-trained model layers.")
     else:
-        logging.warning(f"No checkpoint matched at target destination: '{checkpoint_target}'. Running baseline evaluations over randomized layers.")
+        checkpoint_target = args.weights if args.weights else os.path.join(config["checkpoint_dir"], "best_model.pt")
+        
+        if checkpoint_target and os.path.isfile(checkpoint_target):
+            logging.info(f"Loading fine-tuned checkpoint weights directly from: {checkpoint_target}")
+            checkpoint = torch.load(checkpoint_target, map_location=device, weights_only=False)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            current_epoch = checkpoint.get('epoch', 0)
+        else:
+            logging.warning(f"No checkpoint matched at destination: '{checkpoint_target}'. "
+                            f"Evaluating vanilla pre-trained weights for fine-tuning mode structure instead.")
 
     if wandb:
+        project_name = "action-siglip2-zeroshot-baseline" if args.mode == "zero_shot" else "action-siglip2-peft-eval"
         wandb.init(
-            project="action-siglip2-peft-eval",
+            project=project_name,
             name=f"eval_{args.mode}_{config['num_frames']}f",
             config=config
         )

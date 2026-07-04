@@ -8,8 +8,8 @@ data:
   dataset: "ucf101"
   num_classes: 101
   num_segments: 8
-  base_dir: "data/UCF-101"                 # Path to your actual video files folder
-  annotation_dir: "data/ucfTrainTestlist"   # Path to the folder containing the .txt list files
+  base_dir: "/root/data/UCF-101"                 # Path to your actual video files folder
+  annotation_dir: "/root/data/ucfTrainTestlist"   # Path to the folder containing the .txt list files
   split: 1                                  # Target split number (matches trainlist01.txt / testlist01.txt)
   workers: 8
 
@@ -22,7 +22,7 @@ modes:
     checkpoint_dir: "./exp/siglip2_peft/ucf101/full_peft"
     log_file: "./exp/siglip2_peft/ucf101/full_peft/session.log"
     batch_size: 32
-    num_epochs: 30
+    num_epochs: 10
     lr: 5.e-5
     weight_decay: 0.01
     # Architecture Switches (Corrected to match train.py runtime keys)

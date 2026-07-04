@@ -1,4 +1,4 @@
-# /root/action-siglip/datasets/ucf101.py
+# action-siglip/datasets/ucf101.py
 import os
 import torch
 import random
@@ -7,6 +7,7 @@ import logging
 from torch.utils.data import Dataset
 from decord import VideoReader, cpu
 import decord
+from torchvision.transforms import v2
 
 decord.bridge.set_bridge('torch')
 logger = logging.getLogger(__name__)
@@ -37,6 +38,10 @@ class UCF101VideoDataset(Dataset):
         
         # Load standard UCF101 splits
         self.video_list = self._load_split()
+        self.train_transforms = v2.Compose([
+            v2.RandomHorizontalFlip(p=0.5),
+            v2.RandomCrop(size=(224, 224)), # Or whatever size matches your architecture
+        ])
 
     def _build_class_mappings(self):
         """Scans classInd.txt to build mapping of class strings to 0-indexed IDs."""
@@ -119,8 +124,19 @@ class UCF101VideoDataset(Dataset):
             vr = VideoReader(video_path, ctx=cpu(0))
             total_frames = len(vr)
             frame_indices = self._get_frame_indices(total_frames)
-            frames = vr.get_batch(frame_indices)
-            frames_np = [frame.numpy() for frame in frames]
+            frames = vr.get_batch(frame_indices) # Shape: (8, H, W, C)
+            
+            # 1. Convert to a single PyTorch tensor: (8, C, H, W)
+            frames_tensor = frames.permute(0, 3, 1, 2) 
+            
+            # 2. Apply v2 augmentations consistently across the temporal dimension
+            if self.mode == 'train':
+                frames_tensor = self.train_transforms(frames_tensor)
+                
+            # 3. Convert back to a list of numpy arrays for the HF processor
+            # (Since HF processors expect HWC format for raw images)
+            frames_np = [frame.permute(1, 2, 0).numpy() for frame in frames_tensor]
+            
         except Exception as e:
             frames_np = [np.zeros((224, 224, 3), dtype=np.uint8) for _ in range(self.num_frames)]
 
