@@ -11,6 +11,7 @@ import yaml
 import argparse
 import logging
 import torch
+import torch.nn.functional as F
 import numpy as np
 import random
 from tqdm import tqdm
@@ -53,7 +54,67 @@ def setup_logging(output_dir):
     return log_file
 
 
-def validate(epoch, dataloader, model, device):
+@torch.no_grad()
+def extract_ensembled_text_features(model, class_names, processor, device):
+    """
+    Computes ensembled text embeddings for all 101 target action classes once.
+    Averages multiple prompt contexts to improve zero-shot and PEFT generalization.
+    """
+    logging.info("Extracting cached ensembled text features for all target classes...")
+    model.eval()
+    
+    # Standard academic prompt templates for action datasets
+    templates = [
+        "A video of a person performing {}.",
+        "A video of someone {}.",
+        "An action shot of a person doing {}.",
+        "A crisp video recording of a human participating in {}.",
+        "A dynamic video showing the action of {}."
+    ]
+    
+    class_embeddings = []
+    
+    # Assuming your model has a text encoding pipeline (e.g., model.get_text_features or similar)
+    # If your model architecture computes logits directly inside forward via cross-attention,
+    # ensure your model code contains a method to isolate text embedding projections.
+    has_text_encoder = hasattr(model, 'get_text_features') or hasattr(model, 'encode_text')
+
+    if not has_text_encoder:
+        logging.warning("Model lacks a detached text feature extraction function. Falling back to batch classification.")
+        return None
+
+    for class_name in class_names:
+        # Format the label nicely (e.g., convert "PlayingBasketball" to "playing basketball")
+        clean_name = ''.join([' ' + c.lower() if c.isupper() else c for c in class_name]).strip()
+        prompts = [template.format(clean_name) for template in templates]
+        
+        # Tokenize all prompts for this class
+        inputs = processor(
+            text=prompts,
+            padding="max_length",
+            truncation=True,
+            max_length=64,
+            return_tensors="pt"
+        ).to(device)
+        
+        # Extract features through the text tower
+        if hasattr(model, 'get_text_features'):
+            prompt_embeds = model.get_text_features(inputs["input_ids"], attention_mask=inputs.get("attention_mask"))
+        else:
+            prompt_embeds = model.encode_text(inputs["input_ids"], attention_mask=inputs.get("attention_mask"))
+            
+        # Normalize and average across templates
+        prompt_embeds = F.normalize(prompt_embeds, p=2, dim=-1)
+        ensembled_class_embed = prompt_embeds.mean(dim=0, keepdim=True)
+        ensembled_class_embed = F.normalize(ensembled_class_embed, p=2, dim=-1)
+        
+        class_embeddings.append(ensembled_class_embed)
+        
+    # Stack into a final matrix of shape: [Num_Classes, Embedding_Dim]
+    return torch.cat(class_embeddings, dim=0)
+
+
+def validate(epoch, dataloader, model, device, cached_text_features=None):
     """Clean evaluation checking loop isolating your final target list over to wandb."""
     model.eval()
     all_labels = []
@@ -67,12 +128,22 @@ def validate(epoch, dataloader, model, device):
         for batch in tqdm(dataloader, desc=f"Validation (Epoch {epoch})", file=sys.stdout):
             pixel_values = batch["pixel_values"].to(device)
             labels = batch["label_id"].to(device)
-            
             total_videos += labels.size(0)
             
-            # RUN INFERENCE WITH MIXED PRECISION TO MATCH TRAINING SPEEDS
             with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
-                logits = model(pixel_values)
+                # If cached ensembled text embeddings are available, use matrix multiplication direct inference
+                if cached_text_features is not None and hasattr(model, 'get_vision_features'):
+                    video_features = model.get_vision_features(pixel_values)
+                    video_features = F.normalize(video_features, p=2, dim=-1)
+                    
+                    # Compute cosine similarities scaled by the model's logit scale parameter if available
+                    logit_scale = getattr(model, 'logit_scale', 100.0)
+                    if isinstance(logit_scale, torch.Tensor):
+                        logit_scale = logit_scale.exp()
+                    logits = torch.matmul(video_features, cached_text_features.t()) * logit_scale
+                else:
+                    # Standard forward pass fallback using dataset text prompt extraction
+                    logits = model(pixel_values)
             
             _, predicted = torch.max(logits, 1)
             all_preds.extend(predicted.cpu().numpy())
@@ -106,7 +177,7 @@ def validate(epoch, dataloader, model, device):
     f1_pct = f1 * 100
 
     # Console prints and logging tracking elements configurations
-    report_header = "\n" + "="*50 + f"\n            DETAILED PERFORMANCE REPORT (EPOCH {epoch})           \n" + "="*50
+    report_header = "\n" + "="*50 + f"\n            DETAILED PERFORMANCE REPORT (ENSEMBLED PROMPTS)           \n" + "="*50
     print(report_header)
     print(f"Top-1 Accuracy:  {top1_acc:.2f}%")
     print(f"Top-5 Accuracy:  {top5_acc:.2f}%")
@@ -118,7 +189,6 @@ def validate(epoch, dataloader, model, device):
     print(f"Throughput:      {(total_videos / max(0.001, inference_duration)):.2f} clips/sec")
     print("="*50 + "\n")
 
-    # Sync only your strict target checklist parameters to your WandB Web Portal
     if wandb and wandb.run:
         try:
             wandb.log({
@@ -141,11 +211,9 @@ def validate(epoch, dataloader, model, device):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Unified Evaluation Target Script")
-    
-    # 1. Unified Config Handling Arguments
     parser.add_argument('--config', '-cfg', default='configs/ucf101.yaml', help='Path to the unified YAML file')
     parser.add_argument('--mode', '-m', default='train_full_peft', help='Target mode matrix selection from YAML')
-    parser.add_argument("--weights", type=str, default="", help="Optional explicit path to best_model.pt weights (overrides YAML directory default)")
+    parser.add_argument("--weights", type=str, default="", help="Optional path to best_model.pt weights")
     args = parser.parse_args()
 
     if not os.path.exists(args.config):
@@ -157,7 +225,6 @@ if __name__ == "__main__":
     if "modes" not in raw_yaml or args.mode not in raw_yaml["modes"]:
         raise KeyError(f"Selected target mode configuration option '{args.mode}' not discovered in the YAML map matrix.")
 
-    # 2. Extract shared global keys into a flat evaluation runtime config dict
     config = {
         "model_name": raw_yaml.get("model_name", "google/siglip2-base-patch16-224"),
         "seed": raw_yaml.get("seed", 1024),
@@ -168,15 +235,12 @@ if __name__ == "__main__":
         "num_workers": raw_yaml["data"]["workers"]
     }
     
-    # 3. Dynamically merge current mode specific hyper-parameters onto flat layout
     mode_specific_config = raw_yaml["modes"][args.mode]
     config.update(mode_specific_config)
     
-    # Setup log directory based on configuration structure
     setup_logging(os.path.dirname(config["log_file"]))
     logging.info(f"Loaded master configuration profile for evaluation mode: {args.mode}")
 
-    # Set seeds for validation reproducibility alignment
     torch.manual_seed(config["seed"])
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(config["seed"])
@@ -198,7 +262,6 @@ if __name__ == "__main__":
         mode='val'
     )
     
-    # SYSTEM BOUND WORKER CAPPING AND GENERATOR INITIALIZATION
     g = torch.Generator()
     g.manual_seed(config["seed"])
 
@@ -220,7 +283,6 @@ if __name__ == "__main__":
 
     class_list = val_dataset.unique_labels
     
-    # Initialize structural architecture flags straight from unified flattened configuration
     model = Siglip2FullLoRATemporalBridge(
         model_name=config["model_name"], 
         class_names=class_list,
@@ -233,12 +295,10 @@ if __name__ == "__main__":
 
     current_epoch = 0
 
-    # Handle weight routing dynamically based on Zero-Shot vs Fine-Tuning modes
     if args.mode == "zero_shot":
         logging.info("Executing pure Zero-Shot baseline performance evaluation over vanilla pre-trained model layers.")
     else:
         checkpoint_target = args.weights if args.weights else os.path.join(config["checkpoint_dir"], "best_model.pt")
-        
         if checkpoint_target and os.path.isfile(checkpoint_target):
             logging.info(f"Loading fine-tuned checkpoint weights directly from: {checkpoint_target}")
             checkpoint = torch.load(checkpoint_target, map_location=device, weights_only=False)
@@ -248,6 +308,9 @@ if __name__ == "__main__":
             logging.warning(f"No checkpoint matched at destination: '{checkpoint_target}'. "
                             f"Evaluating vanilla pre-trained weights for fine-tuning mode structure instead.")
 
+    # Run cache pre-extraction before evaluating the data loader stream
+    cached_text_features = extract_ensembled_text_features(model, class_list, processor, device)
+
     if wandb:
         project_name = "action-siglip2-zeroshot-baseline" if args.mode == "zero_shot" else "action-siglip2-peft-eval"
         wandb.init(
@@ -256,7 +319,7 @@ if __name__ == "__main__":
             config=config
         )
 
-    validate(current_epoch, val_loader, model, device)
+    validate(current_epoch, val_loader, model, device, cached_text_features=cached_text_features)
     
     if wandb:
         wandb.finish()
