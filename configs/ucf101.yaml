@@ -1,0 +1,63 @@
+# ==============================================================================
+# Global Configuration (Shared across all execution pipelines)
+# ==============================================================================
+model_name: "google/siglip2-base-patch16-224"
+seed: 1024
+
+data:
+  dataset: "ucf101"
+  num_classes: 101
+  num_segments: 8
+  annotation_path: "lists/ucf_labels.csv"
+  train_list: "/public/home/ock/video_clip/video-clip/lists/ucf101/train_rgb_split1.txt"
+  val_list: "/public/home/ock/video_clip/video-clip/lists/ucf101/val_rgb_split1.txt"
+  workers: 8
+
+# ==============================================================================
+# Mode Matrices (Train, Zero-Shot, and Specific Ablations)
+# ==============================================================================
+modes:
+  # 1. Full Parameter-Efficient Fine-Tuning Setup
+  train_full_peft:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/full_peft"
+    log_file: "./exp/siglip2_peft/ucf101/full_peft/session.log"
+    batch_size: 32
+    num_epochs: 30
+    lr: 5.e-5
+    weight_decay: 0.01
+    # Architecture Switches
+    use_vision_lora: true
+    use_text_lora: true
+    use_temporal_adapter: true
+    lora_r: 4
+    lora_alpha: 8.0
+
+  # 2. Pure Baseline Zero-Shot Performance (Triggers safety guard to stop training)
+  zero_shot:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/zeroshot"
+    log_file: "./exp/siglip2_peft/ucf101/zeroshot/session.log"
+    batch_size: 64 # Double batch size since no backward graph takes up VRAM
+    num_epochs: 1
+    lr: 0.0
+    weight_decay: 0.0
+    # Architecture Switches (Turn everything off)
+    use_vision_lora: false
+    use_text_lora: false
+    use_temporal_adapter: false
+    lora_r: 0
+    lora_alpha: 0.0
+
+  # 3. Ablation Variant Example: Modulating Temporal Dynamics Only
+  ablation_temporal_only:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/temporal_only"
+    log_file: "./exp/siglip2_peft/ucf101/temporal_only/session.log"
+    batch_size: 32
+    num_epochs: 20
+    lr: 1.e-4 # Higher LR works fine since only the tiny adapter is trained
+    weight_decay: 0.01
+    # Architecture Switches
+    use_vision_lora: false
+    use_text_lora: false
+    use_temporal_adapter: true
+    lora_r: 0
+    lora_alpha: 0.0

@@ -2,10 +2,12 @@
 # Author: Cong
 # Decoupled Inference Validation Script - Tracking Explicit Multi-Class Configurations
 # Optimized for Level 5 Dual-Tower Co-Alignment and Hybrid Temporal Bridge Performance
+# Configured for Unified Mode Matrix Parsers (ucf101.yaml)
 
 import os
 import sys
 import time
+import yaml
 import argparse
 import logging
 import torch
@@ -134,44 +136,61 @@ def validate(epoch, dataloader, model, device):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Evaluation Target Script")
+    parser = argparse.ArgumentParser(description="Unified Evaluation Target Script")
     
-    # Modernized explicit text/video dataset arguments path alignments
-    parser.add_argument("--base_dir", type=str, default="/root/data/UCF-101", help="Path to extracted UCF101 video folders")
-    parser.add_argument("--annotation_dir", type=str, default="/root/data/ucfTrainTestlist", help="Path to UCF101 train/test split .txt files")
-    parser.add_argument("--split", type=int, default=1, help="Official UCF101 split to use (1, 2, or 3)")
-    
-    parser.add_argument("--weights", type=str, default="./checkpoints/best_model.pt", help="Path to checkpoint state .pt file")
-    parser.add_argument("--batch_size", type=int, default=16, help="Batch sizing layer step processing constraint")
-    parser.add_argument("--output_dir", type=str, default="./logs", help="Directory location where evaluations write")
-    
-    # LoRA hyperparameter variables tracking shapes dimensions alignments
-    parser.add_argument("--lora_r", type=int, default=8)
-    parser.add_argument("--lora_alpha", type=float, default=16.0)
+    # 1. Unified Config Handling Arguments
+    parser.add_argument('--config', '-cfg', default='configs/ucf101.yaml', help='Path to the unified YAML file')
+    parser.add_argument('--mode', '-m', default='train_full_peft', help='Target mode matrix selection from YAML')
+    parser.add_argument("--weights", type=str, default="", help="Optional explicit path to best_model.pt weights (overrides YAML directory default)")
     args = parser.parse_args()
 
-    setup_logging(args.output_dir)
+    if not os.path.exists(args.config):
+        raise FileNotFoundError(f"Missing configuration file at: {args.config}")
+        
+    with open(args.config, 'r') as f:
+        raw_yaml = yaml.safe_load(f)
+
+    if "modes" not in raw_yaml or args.mode not in raw_yaml["modes"]:
+        raise KeyError(f"Selected target mode configuration option '{args.mode}' not discovered in the YAML map matrix.")
+
+    # 2. Extract shared global keys into a flat evaluation runtime config dict
+    config = {
+        "model_name": raw_yaml.get("model_name", "google/siglip2-base-patch16-224"),
+        "seed": raw_yaml.get("seed", 1024),
+        "base_dir": raw_yaml["data"]["base_dir"],
+        "annotation_dir": raw_yaml["data"]["annotation_dir"],
+        "split": raw_yaml["data"]["split"],
+        "num_frames": raw_yaml["data"]["num_segments"],
+        "num_workers": raw_yaml["data"]["workers"]
+    }
+    
+    # 3. Dynamically merge current mode specific hyper-parameters onto flat layout
+    mode_specific_config = raw_yaml["modes"][args.mode]
+    config.update(mode_specific_config)
+    
+    # Setup log directory based on configuration structure
+    setup_logging(os.path.dirname(config["log_file"]))
+    logging.info(f"Loaded master configuration profile for evaluation mode: {args.mode}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logging.info(f"Targeting active processing evaluation hardware context: {device}")
 
-    model_name = "google/siglip2-base-patch16-224"
-    processor = AutoProcessor.from_pretrained(model_name)
+    processor = AutoProcessor.from_pretrained(config["model_name"])
     
     logging.info("Constructing video datasets validation loader configurations...")
     val_dataset = UCF101VideoDataset(
-        base_dir=args.base_dir, 
-        annotation_dir=args.annotation_dir, 
+        base_dir=config["base_dir"], 
+        annotation_dir=config["annotation_dir"], 
         processor=processor, 
-        split=args.split,
-        num_frames=8, 
+        split=config["split"],
+        num_frames=config["num_frames"], 
         mode='val'
     )
     
-    num_workers = 0 if os.name == 'nt' else 4
+    num_workers = 0 if os.name == 'nt' else config["num_workers"]
     val_loader = DataLoader(
         val_dataset, 
-        batch_size=args.batch_size, 
+        batch_size=config["batch_size"], 
         shuffle=False, 
         num_workers=num_workers, 
         pin_memory=torch.cuda.is_available()
@@ -179,28 +198,34 @@ if __name__ == "__main__":
 
     class_list = val_dataset.unique_labels
     
-    # Initialize the matching Level 5 structural architecture
+    # Initialize structural architecture flags straight from unified flattened configuration
     model = Siglip2FullLoRATemporalBridge(
-        model_name=model_name, 
+        model_name=config["model_name"], 
         class_names=class_list,
-        lora_r=args.lora_r,
-        lora_alpha=args.lora_alpha
+        lora_r=config["lora_r"],
+        lora_alpha=config["lora_alpha"],
+        use_vision_lora=config["vision_lora"],
+        use_text_lora=config["text_lora"],
+        use_temporal_adapter=config["temporal_module"]
     ).to(device)
 
-    if args.weights and os.path.isfile(args.weights):
-        logging.info(f"Loading checkpoint weights directly from: {args.weights}")
-        checkpoint = torch.load(args.weights, map_location=device, weights_only=False)
+    # Determine weight checkpoint loading paths: user override check vs default run folder
+    checkpoint_target = args.weights if args.weights else os.path.join(config["checkpoint_dir"], "best_model.pt")
+    
+    current_epoch = 0
+    if checkpoint_target and os.path.isfile(checkpoint_target):
+        logging.info(f"Loading checkpoint weights directly from: {checkpoint_target}")
+        checkpoint = torch.load(checkpoint_target, map_location=device, weights_only=False)
         model.load_state_dict(checkpoint['model_state_dict'])
         current_epoch = checkpoint.get('epoch', 0)
     else:
-        logging.warning("No checkpoint metrics matched. Running baseline testing evaluations over randomized layers.")
-        current_epoch = 0
+        logging.warning(f"No checkpoint matched at target destination: '{checkpoint_target}'. Running baseline evaluations over randomized layers.")
 
     if wandb:
         wandb.init(
-            project="action-siglip",
-            name="level-5-standalone-eval",
-            config=vars(args)
+            project="action-siglip2-peft-eval",
+            name=f"eval_{args.mode}_{config['num_frames']}f",
+            config=config
         )
 
     validate(current_epoch, val_loader, model, device)

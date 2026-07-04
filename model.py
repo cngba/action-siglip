@@ -29,7 +29,6 @@ class LoRALinear(nn.Module):
         lora_output = (x @ self.lora_A.t()) @ self.lora_B.t()
         return base_output + lora_output * self.scaling
 
-
 class HybridTemporalEventAdapter(nn.Module):
     """
     Combines local chronological mechanics (Conv1D) and global structural 
@@ -78,21 +77,31 @@ class HybridTemporalEventAdapter(nn.Module):
         y = h + self.ffn(self.norm2(h))
         return y
 
-
 class Siglip2FullLoRATemporalBridge(nn.Module):
     """
-    Level 5: Full Co-Alignment Parameter-Efficient Fine-Tuning
-    Vision: Frozen SigLIP + Trainable Spatial LoRA (Q, V) + Trainable Hybrid Temporal Event Adapter.
-    Text: Frozen Text Encoder + Trainable Text LoRA (Q, V) with manual prompt structures.
-    Purpose: Co-optimizes text space representations alongside vision sequence processing, 
-             reshaping multi-modal projections interactively for optimal alignment.
+    Configurable Co-Alignment Parameter-Efficient Fine-Tuning Bridge.
+    Allows toggling Vision LoRA, Text LoRA, and the Hybrid Temporal Adapter module.
+    Enhanced with Dynamic Text Prompt Ensembles.
     """
-    def __init__(self, model_name="google/siglip2-base-patch16-224", class_names=None, lora_r=4, lora_alpha=8.0):
+    def __init__(
+        self, 
+        model_name="google/siglip2-base-patch16-224", 
+        class_names=None, 
+        lora_r=4, 
+        lora_alpha=8.0,
+        use_vision_lora=True,
+        use_text_lora=True,
+        use_temporal_adapter=True
+    ):
         super().__init__()
         if class_names is None:
             raise ValueError("You must provide a list of class_names.")
         
         self.class_names = class_names
+        
+        self.use_vision_lora = use_vision_lora
+        self.use_text_lora = use_text_lora
+        self.use_temporal_adapter = use_temporal_adapter
         
         # 1. Load full SigLIP model foundation layers
         self.model = SiglipModel.from_pretrained(model_name)
@@ -107,21 +116,44 @@ class Siglip2FullLoRATemporalBridge(nn.Module):
         else:
             embedding_dim = getattr(self.model.config, "hidden_size", 768)
 
-        # 3. INJECT LoRA INTO VISION ENCODER SELF-ATTENTION PLACEMENTS
-        self._apply_vision_lora(r=lora_r, alpha=lora_alpha)
+        # 3. Conditionally inject LoRA into Vision Encoder
+        if self.use_vision_lora:
+            self._apply_vision_lora(r=lora_r, alpha=lora_alpha)
+        else:
+            print("Vision Backbone: LoRA skipped. Remaining frozen.")
 
-        # 4. INJECT LoRA INTO TEXT ENCODER SELF-ATTENTION PLACEMENTS (New for Level 5)
-        self._apply_text_lora(r=lora_r, alpha=lora_alpha)
+        # 4. Conditionally inject LoRA into Text Encoder
+        if self.use_text_lora:
+            self._apply_text_lora(r=lora_r, alpha=lora_alpha)
+        else:
+            print("Text Tower: LoRA skipped. Remaining frozen.")
 
-        # 5. FREEZE THE CORE FRAMEWORK EXCEPT FOR GENERATED LoRA ATTRIBUTES
+        # 5. Freeze foundational layers except for parameters containing "lora_"
         for name, param in self.model.named_parameters():
             if "lora_" not in name:
                 param.requires_grad = False
 
-        # 6. INITIALIZE THE TRAINABLE TEMPORAL ADAPTER BLOCK
-        self.temporal_adapter = HybridTemporalEventAdapter(dim=embedding_dim)
+        # 6. Conditionally initialize the Trainable Temporal Adapter
+        if self.use_temporal_adapter:
+            self.temporal_adapter = HybridTemporalEventAdapter(dim=embedding_dim)
+            print("Temporal Block: HybridTemporalEventAdapter active.")
+        else:
+            self.temporal_adapter = None
+            print("Temporal Block: Switched to basic mean pooling across the sequence.")
         
-        self.prompts = [f"A video of {cls_name}" for cls_name in class_names]
+        # --- ITEM 1: Text Prompt Ensembling Templates ---
+        self.templates = [
+            "A video of {}",
+            "A clip showing someone performing {}",
+            "An action of {}",
+            "A demonstration of {}",
+            "A video recording of {}",
+            "A video containing the action of {}",
+            "A prompt showing a person doing {}"
+        ]
+        
+        # Cache for precomputed text features when text tower is frozen
+        self._cached_text_features = None
 
     def _apply_vision_lora(self, r, alpha):
         """Replaces Multi-Head Attention query/value weights in the Vision Transformer with LoRA layers."""
@@ -148,7 +180,9 @@ class Siglip2FullLoRATemporalBridge(nn.Module):
         if mode:
             # Force foundational parameters (LayerNorms, original projections) into evaluation constraints
             self.model.eval()
-            self.temporal_adapter.train()
+            
+            if self.temporal_adapter is not None:
+                self.temporal_adapter.train()
             
             # Explicitly turn on training mode only for custom LoRALinear layers across both towers
             for m in self.model.modules():
@@ -157,26 +191,61 @@ class Siglip2FullLoRATemporalBridge(nn.Module):
         return self
 
     def _get_text_features(self, device):
-        """
-        Generates text features dynamically. 
-        CRITICAL FOR LEVEL 5: Because the Text Encoder contains active LoRA gradients, 
-        we can no longer cache text embeddings statically; they must update every forward pass.
-        """
-        inputs = self.processor.tokenizer(
-            text=self.prompts, 
-            padding="longest", 
-            truncation=True, 
-            return_tensors="pt"
-        )
-        input_ids = inputs["input_ids"].to(device)
-        attention_mask = inputs.get("attention_mask")
-        if attention_mask is not None:
-            attention_mask = attention_mask.to(device)
+        """Generates text features dynamically across prompt templates."""
+        num_classes = len(self.class_names)
+        num_templates = len(self.templates)
+
+        # OPTIMIZATION 1: If text LoRA is off, return the precomputed cache
+        if not self.use_text_lora:
+            if self._cached_text_features is not None:
+                return self._cached_text_features.to(device)
+            
+            # First-time setup: Compute once under no_grad and cache it forever
+            with torch.no_grad():
+                stacked_embeddings = []
+                for template in self.templates:
+                    prompts = [template.format(cls_name) for cls_name in self.class_names]
+                    inputs = self.processor.tokenizer(text=prompts, padding="longest", truncation=True, return_tensors="pt")
+                    
+                    text_outputs = self.model.text_model(
+                        input_ids=inputs["input_ids"].to(device), 
+                        attention_mask=inputs.get("attention_mask").to(device) if inputs.get("attention_mask") is not None else None
+                    )
+                    # Normalize embeddings before pooling them
+                    norm_features = F.normalize(text_outputs.pooler_output, p=2, dim=-1)
+                    stacked_embeddings.append(norm_features.cpu())
+                
+                # Mean ensemble aggregation across all templates
+                mean_features = torch.stack(stacked_embeddings, dim=0).mean(dim=0)
+                self._cached_text_features = F.normalize(mean_features, p=2, dim=-1)
+                
+            return self._cached_text_features.to(device)
         
-        text_outputs = self.model.text_model(input_ids=input_ids, attention_mask=attention_mask)
-        text_features = text_outputs.pooler_output
+        # OPTIMIZATION 2: Dynamic generation when Text LoRA gradients are active
+        stacked_embeddings = []
         
-        text_features = F.normalize(text_features, p=2, dim=-1)
+        # Loop over templates to gather features under the active graph tracking context
+        for template in self.templates:
+            prompts = [template.format(cls_name) for cls_name in self.class_names]
+            inputs = self.processor.tokenizer(text=prompts, padding="longest", truncation=True, return_tensors="pt")
+            
+            input_ids = inputs["input_ids"].to(device)
+            attention_mask = inputs.get("attention_mask")
+            if attention_mask is not None:
+                attention_mask = attention_mask.to(device)
+            
+            if self.use_text_lora and self.training:
+                text_outputs = self.model.text_model(input_ids=input_ids, attention_mask=attention_mask)
+            else:
+                with torch.no_grad():
+                    text_outputs = self.model.text_model(input_ids=input_ids, attention_mask=attention_mask)
+            
+            norm_features = F.normalize(text_outputs.pooler_output, p=2, dim=-1)
+            stacked_embeddings.append(norm_features)
+            
+        # Composite latent mean representation vector mapping
+        mean_features = torch.stack(stacked_embeddings, dim=0).mean(dim=0)
+        text_features = F.normalize(mean_features, p=2, dim=-1)
         return text_features
 
     def forward(self, pixel_values):
@@ -187,7 +256,7 @@ class Siglip2FullLoRATemporalBridge(nn.Module):
         # 1. Flatten B and T to map sequential frames through the 2D vision encoder
         pixel_values = pixel_values.view(B * T, C, H, W)
         
-        # 2. Extract spatial layout features with active Vision LoRA gradients
+        # 2. Extract spatial layout features (Vision LoRA handles internal gradients)
         vision_outputs = self.model.vision_model(pixel_values=pixel_values)
         spatial_sequence = vision_outputs.last_hidden_state  # (B*T, S, D)
         
@@ -195,19 +264,20 @@ class Siglip2FullLoRATemporalBridge(nn.Module):
         frame_features = self.model.vision_model.head(spatial_sequence)  # (B*T, D)
         frame_features = frame_features.view(B, T, -1)  # (B, T, D)
         
-        # 4. Process sequence with the Trainable Temporal Adapter
-        video_features = self.temporal_adapter(frame_features)  # (B, T, D)
-        
-        # 5. Average temporal records across time sequence blocks
-        video_features = video_features.mean(dim=1)  # (B, D)
-        
-        # 6. L2 Normalize video representations
+        # 4. Conditionally process sequence with the Temporal Adapter or perform baseline mean pooling
+        if self.use_temporal_adapter and self.temporal_adapter is not None:
+            video_features = self.temporal_adapter(frame_features)  # (B, T, D)
+            video_features = video_features.mean(dim=1)  # (B, D)
+        else:
+            video_features = frame_features.mean(dim=1)  # (B, D) directly maps to mean pooling
+
+        # 5. L2 Normalize video representations
         video_features = F.normalize(video_features, p=2, dim=-1)
         
-        # 7. Dynamically generate Text features containing Text LoRA gradients
+        # 6. Dynamically generate Text features containing Text LoRA gradients (if active)
         text_features = self._get_text_features(device)  # (Num_Classes, D)
         
-        # 8. Compute contrastive logits output using the SigLIP exponential scalar multiplier
+        # 7. Compute contrastive logits output using the SigLIP exponential scalar multiplier
         logit_scale = self.model.logit_scale.exp()
         logits = (video_features @ text_features.T) * logit_scale  # (B, Num_Classes)
         
