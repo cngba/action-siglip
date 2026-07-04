@@ -115,7 +115,6 @@ def main():
     with open(args.config, 'r') as f:
         raw_yaml = yaml.safe_load(f)
     
-    logger.info(f"Loaded master configuration profile from {args.config}")
     
     if "modes" not in raw_yaml or args.mode not in raw_yaml["modes"]:
         raise KeyError(f"Selected target mode configuration option '{args.mode}' not discovered in the YAML map matrix.")
@@ -137,6 +136,7 @@ def main():
     
     target_log = config.get("log_file", f"logs/{args.mode}_{log_time}.log")
     logger = setup_logger(target_log)
+    logger.info(f"Loaded master configuration profile from {args.config}")
     
     logger.info(f"Successfully compiled configuration vectors for operational target matrix: {args.mode}")
 
