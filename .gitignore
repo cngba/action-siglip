@@ -1,3 +1,13 @@
+# VSCode
+.vscode/
+
+# Folders
+checkpoint/
+checkpoints/
+logs/
+wandb/
+exp/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
