@@ -75,3 +75,31 @@ modes:
     temporal_module: true
     lora_r: 4
     lora_alpha: 8.0
+
+  ablation_no_vision:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/no_vision"
+    log_file: "./exp/siglip2_peft/ucf101/no_vision/session.log"
+    batch_size: 32
+    num_epochs: 30
+    lr: 5.e-5 
+    weight_decay: 0.01
+    # Architecture Switches
+    vision_lora: false
+    text_lora: true
+    temporal_module: true
+    lora_r: 4
+    lora_alpha: 8.0
+
+  ablation_no_temporal:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/no_temporal"
+    log_file: "./exp/siglip2_peft/ucf101/no_temporal/session.log"
+    batch_size: 32
+    num_epochs: 30
+    lr: 5.e-5 
+    weight_decay: 0.01
+    # Architecture Switches
+    vision_lora: true
+    text_lora: true
+    temporal_module: false
+    lora_r: 4
+    lora_alpha: 8.0
