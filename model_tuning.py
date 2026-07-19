@@ -90,6 +90,7 @@ class Siglip2FullLoRATemporalBridge(nn.Module):
         class_names=None, 
         lora_r=4, 
         lora_alpha=8.0,
+        target_modules=["q_proj", "v_proj"],
         use_vision_lora=True,
         use_text_lora=True,
         use_temporal_adapter=True
@@ -99,6 +100,7 @@ class Siglip2FullLoRATemporalBridge(nn.Module):
             raise ValueError("You must provide a list of class_names.")
         
         self.class_names = class_names
+        self.target_modules = target_modules
         
         self.use_vision_lora = use_vision_lora
         self.use_text_lora = use_text_lora
@@ -119,13 +121,13 @@ class Siglip2FullLoRATemporalBridge(nn.Module):
 
         # 3. Conditionally inject LoRA into Vision Encoder
         if self.use_vision_lora:
-            self._apply_vision_lora(r=lora_r, alpha=lora_alpha)
+            self._apply_vision_lora(r=lora_r, alpha=lora_alpha, target_modules=self.target_modules)
         else:
             print("Vision Backbone: LoRA skipped. Remaining frozen.")
 
         # 4. Conditionally inject LoRA into Text Encoder
         if self.use_text_lora:
-            self._apply_text_lora(r=lora_r, alpha=lora_alpha)
+            self._apply_text_lora(r=lora_r, alpha=lora_alpha, target_modules=self.target_modules)
         else:
             print("Text Tower: LoRA skipped. Remaining frozen.")
 
@@ -156,24 +158,28 @@ class Siglip2FullLoRATemporalBridge(nn.Module):
         # Cache for precomputed text features when text tower is frozen
         self._cached_text_features = None
 
-    def _apply_vision_lora(self, r, alpha):
-        """Replaces Multi-Head Attention query/value weights in the Vision Transformer with LoRA layers."""
+    def _apply_vision_lora(self, r, alpha, target_modules):
+        """Replaces Multi-Head Attention query/value/key/out weights in the Vision Transformer with LoRA layers."""
         num_injected = 0
         for layer in self.model.vision_model.encoder.layers:
-            if hasattr(layer.self_attn, "q_proj") and hasattr(layer.self_attn, "v_proj"):
-                layer.self_attn.q_proj = LoRALinear(layer.self_attn.q_proj, r=r, alpha=alpha)
-                layer.self_attn.v_proj = LoRALinear(layer.self_attn.v_proj, r=r, alpha=alpha)
-                num_injected += 2
+            for module_name in target_modules:
+                if hasattr(layer.self_attn, module_name):
+                    original_linear = getattr(layer.self_attn, module_name)
+                    if isinstance(original_linear, nn.Linear):
+                        setattr(layer.self_attn, module_name, LoRALinear(original_linear, r=r, alpha=alpha))
+                        num_injected += 1
         print(f"Vision Backbone: Injected {num_injected} spatial LoRA projection layers.")
 
-    def _apply_text_lora(self, r, alpha):
-        """Replaces Multi-Head Attention query/value weights in the Text Encoder with LoRA layers."""
+    def _apply_text_lora(self, r, alpha, target_modules):
+        """Replaces Multi-Head Attention query/value/key/out weights in the Text Encoder with LoRA layers."""
         num_injected = 0
         for layer in self.model.text_model.encoder.layers:
-            if hasattr(layer.self_attn, "q_proj") and hasattr(layer.self_attn, "v_proj"):
-                layer.self_attn.q_proj = LoRALinear(layer.self_attn.q_proj, r=r, alpha=alpha)
-                layer.self_attn.v_proj = LoRALinear(layer.self_attn.v_proj, r=r, alpha=alpha)
-                num_injected += 2
+            for module_name in target_modules:
+                if hasattr(layer.self_attn, module_name):
+                    original_linear = getattr(layer.self_attn, module_name)
+                    if isinstance(original_linear, nn.Linear):
+                        setattr(layer.self_attn, module_name, LoRALinear(original_linear, r=r, alpha=alpha))
+                        num_injected += 1
         print(f"Text Tower: Injected {num_injected} linguistic LoRA projection layers.")
 
     def train(self, mode: bool = True):
