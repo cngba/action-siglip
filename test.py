@@ -1,7 +1,7 @@
 # test.py
 # Author: Cong
 # Decoupled Inference Validation Script - Tracking Explicit Multi-Class Configurations
-# Optimized for Level 5 Dual-Tower Co-Alignment and Hybrid Temporal Bridge Performance
+# Optimized for SigLIP 2 PEFT and Hybrid Temporal Module Performance
 # Configured for Unified Mode Matrix Parsers (ucf101.yaml)
 
 import os
@@ -27,7 +27,7 @@ try:
 except ImportError:
     wandb = None
 
-from model import Siglip2FullLoRATemporalBridge
+from model import Siglip2ActionModel
 from datasets import UCF101VideoDataset
 
 
@@ -55,67 +55,11 @@ def setup_logging(output_dir):
 
 
 @torch.no_grad()
-def extract_ensembled_text_features(model, class_names, processor, device):
+def validate(epoch, dataloader, model, device, unseen_class_names=None, is_zero_shot=False):
     """
-    Computes ensembled text embeddings for all 101 target action classes once.
-    Averages multiple prompt contexts to improve zero-shot and PEFT generalization.
+    Clean evaluation checking loop computing metrics based on L2-normalized cosine similarities.
+    Supports both traditional validation and Zero-Shot Learning scenarios.
     """
-    logging.info("Extracting cached ensembled text features for all target classes...")
-    model.eval()
-    
-    # Standard academic prompt templates for action datasets
-    templates = [
-        "A video of a person performing {}.",
-        "A video of someone {}.",
-        "An action shot of a person doing {}.",
-        "A crisp video recording of a human participating in {}.",
-        "A dynamic video showing the action of {}."
-    ]
-    
-    class_embeddings = []
-    
-    # Assuming your model has a text encoding pipeline (e.g., model.get_text_features or similar)
-    # If your model architecture computes logits directly inside forward via cross-attention,
-    # ensure your model code contains a method to isolate text embedding projections.
-    has_text_encoder = hasattr(model, 'get_text_features') or hasattr(model, 'encode_text')
-
-    if not has_text_encoder:
-        logging.warning("Model lacks a detached text feature extraction function. Falling back to batch classification.")
-        return None
-
-    for class_name in class_names:
-        # Format the label nicely (e.g., convert "PlayingBasketball" to "playing basketball")
-        clean_name = ''.join([' ' + c.lower() if c.isupper() else c for c in class_name]).strip()
-        prompts = [template.format(clean_name) for template in templates]
-        
-        # Tokenize all prompts for this class
-        inputs = processor(
-            text=prompts,
-            padding="max_length",
-            truncation=True,
-            max_length=64,
-            return_tensors="pt"
-        ).to(device)
-        
-        # Extract features through the text tower
-        if hasattr(model, 'get_text_features'):
-            prompt_embeds = model.get_text_features(inputs["input_ids"], attention_mask=inputs.get("attention_mask"))
-        else:
-            prompt_embeds = model.encode_text(inputs["input_ids"], attention_mask=inputs.get("attention_mask"))
-            
-        # Normalize and average across templates
-        prompt_embeds = F.normalize(prompt_embeds, p=2, dim=-1)
-        ensembled_class_embed = prompt_embeds.mean(dim=0, keepdim=True)
-        ensembled_class_embed = F.normalize(ensembled_class_embed, p=2, dim=-1)
-        
-        class_embeddings.append(ensembled_class_embed)
-        
-    # Stack into a final matrix of shape: [Num_Classes, Embedding_Dim]
-    return torch.cat(class_embeddings, dim=0)
-
-
-def validate(epoch, dataloader, model, device, cached_text_features=None):
-    """Clean evaluation checking loop isolating your final target list over to wandb."""
     model.eval()
     all_labels = []
     all_preds = []
@@ -124,31 +68,33 @@ def validate(epoch, dataloader, model, device, cached_text_features=None):
     start_time = time.time()
     total_videos = 0
 
-    with torch.no_grad():
-        for batch in tqdm(dataloader, desc=f"Validation (Epoch {epoch})", file=sys.stdout):
-            pixel_values = batch["pixel_values"].to(device)
+    # Lựa chọn tập nhãn mục tiêu dựa trên kịch bản đánh giá
+    target_classes = unseen_class_names if is_zero_shot and unseen_class_names is not None else model.class_names
+    class_to_idx = {name: idx for idx, name in enumerate(target_classes)}
+
+    desc_msg = f"Zero-Shot Evaluation" if is_zero_shot else f"Validation (Epoch {epoch})"
+    
+    for batch in tqdm(dataloader, desc=desc_msg, file=sys.stdout):
+        pixel_values = batch["pixel_values"].to(device)
+        
+        # Xử lý nhãn tương ứng với kịch bản
+        if is_zero_shot and "label_name" in batch:
+            raw_labels = batch["label_name"]
+            labels = torch.tensor([class_to_idx[lbl] for lbl in raw_labels], dtype=torch.long).to(device)
+        else:
             labels = batch["label_id"].to(device)
-            total_videos += labels.size(0)
             
-            with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
-                # If cached ensembled text embeddings are available, use matrix multiplication direct inference
-                if cached_text_features is not None and hasattr(model, 'get_vision_features'):
-                    video_features = model.get_vision_features(pixel_values)
-                    video_features = F.normalize(video_features, p=2, dim=-1)
-                    
-                    # Compute cosine similarities scaled by the model's logit scale parameter if available
-                    logit_scale = getattr(model, 'logit_scale', 100.0)
-                    if isinstance(logit_scale, torch.Tensor):
-                        logit_scale = logit_scale.exp()
-                    logits = torch.matmul(video_features, cached_text_features.t()) * logit_scale
-                else:
-                    # Standard forward pass fallback using dataset text prompt extraction
-                    logits = model(pixel_values)
-            
-            _, predicted = torch.max(logits, 1)
-            all_preds.extend(predicted.cpu().numpy())
-            all_labels.extend(labels.cpu().numpy())
-            all_logits.append(logits.cpu())
+        total_videos += labels.size(0)
+        
+        # Forward pass sử dụng Mixed Precision tăng tốc phần cứng
+        with torch.amp.autocast_mode.autocast(device_type="cuda", dtype=torch.float16):
+            # model tự động tính toán v_norm, t_norm và nhân logit_scale bên trong
+            logits = model(pixel_values, unseen_class_names=unseen_class_names, is_zero_shot=is_zero_shot)
+        
+        _, predicted = torch.max(logits, 1)
+        all_preds.extend(predicted.cpu().numpy())
+        all_labels.extend(labels.cpu().numpy())
+        all_logits.append(logits.cpu())
             
     end_time = time.time()
     inference_duration = end_time - start_time
@@ -157,7 +103,7 @@ def validate(epoch, dataloader, model, device, cached_text_features=None):
     all_labels = np.array(all_labels)
     all_preds = np.array(all_preds)
     
-    # 1. Top-1 Target Calculation
+    # 1. Top-1 Target Calculation (Công thức 3.17)
     top1_acc = accuracy_score(all_labels, all_preds) * 100
     
     # 2. Top-5 Target Calculation
@@ -167,7 +113,7 @@ def validate(epoch, dataloader, model, device, cached_text_features=None):
     topk_correct = topk_indices.eq(torch.tensor(all_labels).view(-1, 1)).sum().item()
     top5_acc = (topk_correct / total_videos) * 100
 
-    # 3. Macro Target Precision, Recall, and F1 calculations
+    # 3. Macro Target Precision, Recall, và F1 calculations
     precision, recall, f1, _ = precision_recall_fscore_support(
         all_labels, all_preds, average='macro', zero_division=0
     )
@@ -177,7 +123,8 @@ def validate(epoch, dataloader, model, device, cached_text_features=None):
     f1_pct = f1 * 100
 
     # Console prints and logging tracking elements configurations
-    report_header = "\n" + "="*50 + f"\n            DETAILED PERFORMANCE REPORT (ENSEMBLED PROMPTS)           \n" + "="*50
+    report_title = "DETAILED ZERO-SHOT REPORT" if is_zero_shot else "DETAILED PERFORMANCE REPORT"
+    report_header = "\n" + "="*50 + f"\n            {report_title} (DYNAMIC PROMPTS)           \n" + "="*50
     print(report_header)
     print(f"Top-1 Accuracy:  {top1_acc:.2f}%")
     print(f"Top-5 Accuracy:  {top5_acc:.2f}%")
@@ -191,13 +138,14 @@ def validate(epoch, dataloader, model, device, cached_text_features=None):
 
     if wandb and wandb.run:
         try:
+            prefix = "zero_shot_" if is_zero_shot else "val_"
             wandb.log({
                 "epoch": epoch,
-                "val_top1": top1_acc,
-                "val_top5": top5_acc,
-                "val_f1": f1_pct,
-                "val_precision": precision_pct,
-                "val_recall": recall_pct
+                f"{prefix}top1": top1_acc,
+                f"{prefix}top5": top5_acc,
+                f"{prefix}f1": f1_pct,
+                f"{prefix}precision": precision_pct,
+                f"{prefix}recall": recall_pct
             })
         except Exception as e:
             print(f"[Wandb Telemetry Warning] Connection stream skipped: {e}")
@@ -213,7 +161,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Unified Evaluation Target Script")
     parser.add_argument('--config', '-cfg', default='configs/ucf101.yaml', help='Path to the unified YAML file')
     parser.add_argument('--mode', '-m', default='train_full_peft', help='Target mode matrix selection from YAML')
-    parser.add_argument("--weights", type=str, default="", help="Optional path to best_model.pt weights")
+    parser.add_argument("--weights", type=str, default="", help="Optional path to checkpoint weights")
     args = parser.parse_args()
 
     if not os.path.exists(args.config):
@@ -253,6 +201,9 @@ if __name__ == "__main__":
     processor = AutoProcessor.from_pretrained(config["model_name"])
     
     logging.info("Constructing video datasets validation loader configurations...")
+    
+    is_zs_mode = (args.mode == "zero_shot")
+    
     val_dataset = UCF101VideoDataset(
         base_dir=config["base_dir"], 
         annotation_dir=config["annotation_dir"], 
@@ -281,22 +232,26 @@ if __name__ == "__main__":
         generator=g
     )
 
+    # Đọc danh sách nhãn hành vi từ Dataset
     class_list = val_dataset.unique_labels
     
-    model = Siglip2FullLoRATemporalBridge(
+    # Khởi tạo Siglip2ActionModel đồng bộ với file model.py mới
+    model = Siglip2ActionModel(
         model_name=config["model_name"], 
         class_names=class_list,
         lora_r=config["lora_r"],
         lora_alpha=config["lora_alpha"],
-        use_vision_lora=config["vision_lora"],
-        use_text_lora=config["text_lora"],
-        use_temporal_adapter=config["temporal_module"]
+        num_prompt_tokens=config.get("num_prompt_tokens", 4)
     ).to(device)
 
     current_epoch = 0
+    unseen_classes = None
 
-    if args.mode == "zero_shot":
-        logging.info("Executing pure Zero-Shot baseline performance evaluation over vanilla pre-trained model layers.")
+    if is_zs_mode:
+        logging.info("Executing pure Zero-Shot baseline performance evaluation over unseen action domains.")
+        # Giả sử bạn chuẩn bị sẵn một danh sách các nhãn chưa từng thấy cho kịch bản học không mẫu
+        # Nếu bộ dữ liệu val_dataset đã lọc sẵn lớp unseen, ta lấy trực tiếp class_list làm unseen_classes
+        unseen_classes = config.get("unseen_class_names", class_list)
     else:
         checkpoint_target = args.weights if args.weights else os.path.join(config["checkpoint_dir"], "best_model.pt")
         if checkpoint_target and os.path.isfile(checkpoint_target):
@@ -306,20 +261,25 @@ if __name__ == "__main__":
             current_epoch = checkpoint.get('epoch', 0)
         else:
             logging.warning(f"No checkpoint matched at destination: '{checkpoint_target}'. "
-                            f"Evaluating vanilla pre-trained weights for fine-tuning mode structure instead.")
-
-    # Run cache pre-extraction before evaluating the data loader stream
-    cached_text_features = extract_ensembled_text_features(model, class_list, processor, device)
+                            f"Evaluating vanilla pre-trained weights instead.")
 
     if wandb:
-        project_name = "action-siglip2-zeroshot-baseline" if args.mode == "zero_shot" else "action-siglip2-peft-eval"
+        project_name = "action-siglip2-zeroshot" if is_zs_mode else "action-siglip2-peft-eval"
         wandb.init(
             project=project_name,
             name=f"eval_{args.mode}_{config['num_frames']}f",
             config=config
         )
 
-    validate(current_epoch, val_loader, model, device, cached_text_features=cached_text_features)
+    # Thực hiện gọi hàm kiểm định cấu trúc hình học thực tế
+    validate(
+        epoch=current_epoch, 
+        dataloader=val_loader, 
+        model=model, 
+        device=device, 
+        unseen_class_names=unseen_classes, 
+        is_zero_shot=is_zs_mode
+    )
     
     if wandb:
         wandb.finish()

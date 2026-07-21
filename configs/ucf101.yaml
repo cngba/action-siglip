@@ -8,8 +8,10 @@ data:
   dataset: "ucf101"
   num_classes: 101
   num_segments: 8
-  base_dir: "/root/data/UCF-101"                 # Path to your actual video files folder
-  annotation_dir: "/root/data/ucfTrainTestlist"   # Path to the folder containing the .txt list files
+  base_dir: "C:\\Users\\CONG\\source\\data\\UCF101\\UCF-101"
+  annotation_dir: "C:\\Users\\CONG\\source\\data\\ucfTrainTestlist"
+  # base_dir: "/root/data/UCF-101"                 # Path to your actual video files folder
+  # annotation_dir: "/root/data/ucfTrainTestlist"   # Path to the folder containing the .txt list files
   split: 1                                  # Target split number (matches trainlist01.txt / testlist01.txt)
   workers: 8
 

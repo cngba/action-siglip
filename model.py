@@ -6,7 +6,7 @@ from transformers import SiglipModel, AutoProcessor
 
 class LoRALinear(nn.Module):
     """
-    Injects a Low-Rank Adaptation (LoRA) matrix side-by-side with a frozen linear layer.
+    Tích hợp ma trận LoRA hạng thấp song song với lớp tuyến tính đã đóng băng[cite: 1, 2].
     """
     def __init__(self, original_linear: nn.Linear, r: int = 4, alpha: float = 8.0):
         super().__init__()
@@ -21,7 +21,7 @@ class LoRALinear(nn.Module):
         self.lora_A = nn.Parameter(torch.zeros(r, in_features))
         self.lora_B = nn.Parameter(torch.zeros(out_features, r))
 
-        # Re-initialize low-rank pathway weight distributions
+        # Khởi tạo ma trận A theo phân phối Kaiming Uniform, B bằng 0[cite: 1]
         nn.init.kaiming_uniform_(self.lora_A, a=5**0.5)
         nn.init.zeros_(self.lora_B)
 
@@ -30,59 +30,102 @@ class LoRALinear(nn.Module):
         lora_output = (x @ self.lora_A.t()) @ self.lora_B.t()
         return base_output + lora_output * self.scaling
 
-class HybridTemporalEventAdapter(nn.Module):
-    """
-    Combines local chronological mechanics (Conv1D) and global structural 
-    dependencies (Multi-head Self-Attention) across the frame sequence.
-    """
-    def __init__(self, dim=768, num_heads=8, kernel_size=3, mlp_ratio=4):
-        super().__init__()
-        self.norm1 = nn.LayerNorm(dim)
 
-        # Local temporal branch (neighboring frame adjustments)
-        self.local_conv = nn.Conv1d(
+class HybridTemporalModule(nn.Module):
+    """
+    Mô đun Không-Thời gian Lai chuyển giao từ học không gian sang học không-thời gian[cite: 1].
+    """
+    def __init__(self, dim=768, num_heads=8, kernel_size=3):
+        super().__init__()
+        
+        # 1. Nhánh trích xuất đặc trưng cục bộ (Conv1D)[cite: 1]
+        self.conv = nn.Conv1d(
             in_channels=dim,
             out_channels=dim,
             kernel_size=kernel_size,
-            padding=kernel_size // 2,
-            groups=dim
+            padding=kernel_size // 2
         )
-
-        # Global temporal branch (cross-sequence dependencies)
+        
+        # 2. Nhánh trích xuất tương quan toàn cục (MHSA)[cite: 1]
         self.attn = nn.MultiheadAttention(
             embed_dim=dim,
             num_heads=num_heads,
             batch_first=True
         )
-
-        self.alpha = nn.Parameter(torch.tensor(1.0))
-        self.beta = nn.Parameter(torch.tensor(1.0))
-
-        hidden = dim * mlp_ratio
-        self.norm2 = nn.LayerNorm(dim)
-        self.ffn = nn.Sequential(
-            nn.Linear(dim, hidden),
-            nn.GELU(),
-            nn.Linear(hidden, dim)
+        
+        # Các hệ số vô hướng học được khởi tạo bằng 0.1[cite: 1]
+        self.alpha = nn.Parameter(torch.tensor(0.1))
+        self.beta = nn.Parameter(torch.tensor(0.1))
+        
+        self.norm = nn.LayerNorm(dim)
+        
+        # Mạng GRU hai chiều với kích thước ẩn C/2 để đầu ra đồng nhất C[cite: 1]
+        self.gru = nn.GRU(
+            input_size=dim,
+            hidden_size=dim // 2,
+            bidirectional=True,
+            batch_first=True
         )
+        
+        # Vector truy vấn cho Attention Pooling[cite: 1]
+        self.q_pool = nn.Parameter(torch.randn(dim, 1))
 
     def forward(self, x):
-        z = self.norm1(x)
+        # X shape: (B, T, C)
         
-        local = z.transpose(1, 2)
-        local = self.local_conv(local)
-        local = local.transpose(1, 2)
+        # Nhánh cục bộ: X_conv = GELU(Conv1D(X))
+        x_transpose = x.transpose(1, 2) # (B, C, T)
+        x_conv = F.gelu(self.conv(x_transpose)).transpose(1, 2) # (B, T, C)
+        
+        # Nhánh toàn cục: X_attn = MHSA(X)
+        x_attn, _ = self.attn(x, x, x)
+        
+        # Nhánh kết nối tắt và Tích hợp có trọng số động
+        x_fuse = x + self.alpha * x_conv + self.beta * x_attn
+        
+        # Chuẩn hóa LayerNorm
+        x_ln = self.norm(x_fuse)
+        
+        # Làm mịn thông tin bằng BiGRU
+        x_gru, _ = self.gru(x_ln) # Đầu ra sẽ có chiều (B, T, dim//2 * 2) = (B, T, C)
+        
+        # Attention Pooling
+        # a = softmax((X_gru * q_pool) / sqrt(C))
+        C_sqrt = (x_gru.size(-1) ** 0.5)
+        attn_logits = (x_gru @ self.q_pool) / C_sqrt # (B, T, 1)
+        a = F.softmax(attn_logits, dim=1) # (B, T, 1)
+        
+        # Nén chuỗi thời gian thành vector duy nhất v
+        v = (x_gru * a).sum(dim=1) # (B, C)
+        
+        return v
 
-        global_feat, _ = self.attn(z, z, z)
-        h = x + self.alpha * local + self.beta * global_feat
-        y = h + self.ffn(self.norm2(h))
-        return y
 
-class Siglip2FullLoRATemporalBridge(nn.Module):
+class MetaNet(nn.Module):
     """
-    Configurable Co-Alignment Parameter-Efficient Fine-Tuning Bridge.
-    Allows toggling Vision LoRA, Text LoRA, and the Hybrid Temporal Adapter module.
-    Enhanced with Dynamic Text Prompt Ensembles.
+    Mạng Meta-Net sinh các token ngữ cảnh động từ đặc trưng video[cite: 1].
+    """
+    def __init__(self, dim, num_prompt_tokens=4):
+        super().__init__()
+        self.num_prompt_tokens = num_prompt_tokens
+        self.dim = dim
+        # Cấu trúc MLP gồm 2 tầng tuyến tính kết hợp hàm kích hoạt ReLU[cite: 1]
+        self.net = nn.Sequential(
+            nn.Linear(dim, dim),
+            nn.ReLU(),
+            nn.Linear(dim, num_prompt_tokens * dim)
+        )
+
+    def forward(self, v):
+        # Đầu vào v: (B, C), Đầu ra: (B, M, C)
+        B = v.size(0)
+        delta_v = self.net(v)
+        return delta_v.view(B, self.num_prompt_tokens, self.dim)
+
+
+class Siglip2ActionModel(nn.Module):
+    """
+    Hệ thống nhận dạng hành vi người dựa trên SigLIP 2, LoRA, và Không-Thời gian Lai[cite: 1].
     """
     def __init__(
         self, 
@@ -90,25 +133,17 @@ class Siglip2FullLoRATemporalBridge(nn.Module):
         class_names=None, 
         lora_r=4, 
         lora_alpha=8.0,
-        use_vision_lora=True,
-        use_text_lora=True,
-        use_temporal_adapter=True
+        num_prompt_tokens=4
     ):
         super().__init__()
         if class_names is None:
-            raise ValueError("You must provide a list of class_names.")
-        
+            raise ValueError("Cần cung cấp danh sách class_names.")
         self.class_names = class_names
         
-        self.use_vision_lora = use_vision_lora
-        self.use_text_lora = use_text_lora
-        self.use_temporal_adapter = use_temporal_adapter
-        
-        # 1. Load full SigLIP model foundation layers
+        # Tải mô hình nền tảng SigLIP 2[cite: 1]
         self.model = SiglipModel.from_pretrained(model_name)
         self.processor = AutoProcessor.from_pretrained(model_name)
         
-        # 2. Extract configuration dimensions safely
         if hasattr(self.model.config, "text_config") and self.model.config.text_config is not None:
             if isinstance(self.model.config.text_config, dict):
                 embedding_dim = self.model.config.text_config.get("hidden_size", 768)
@@ -117,155 +152,102 @@ class Siglip2FullLoRATemporalBridge(nn.Module):
         else:
             embedding_dim = getattr(self.model.config, "hidden_size", 768)
 
-        # 3. Conditionally inject LoRA into Vision Encoder
-        if self.use_vision_lora:
-            self._apply_vision_lora(r=lora_r, alpha=lora_alpha)
-        else:
-            print("Vision Backbone: LoRA skipped. Remaining frozen.")
+        # 1. Tích hợp LoRA cho Vision và Text Encoder (Q, K, V, O)[cite: 1]
+        self._apply_lora_to_encoder(self.model.vision_model.encoder, r=lora_r, alpha=lora_alpha, name="Vision")
+        self._apply_lora_to_encoder(self.model.text_model.encoder, r=lora_r, alpha=lora_alpha, name="Text")
 
-        # 4. Conditionally inject LoRA into Text Encoder
-        if self.use_text_lora:
-            self._apply_text_lora(r=lora_r, alpha=lora_alpha)
-        else:
-            print("Text Tower: LoRA skipped. Remaining frozen.")
-
-        # 5. Freeze foundational layers except for parameters containing "lora_"
+        # Đóng băng toàn bộ trọng số gốc, chỉ huấn luyện tham số LoRA[cite: 1]
         for name, param in self.model.named_parameters():
             if "lora_" not in name:
                 param.requires_grad = False
 
-        # 6. Conditionally initialize the Trainable Temporal Adapter
-        if self.use_temporal_adapter:
-            self.temporal_adapter = HybridTemporalEventAdapter(dim=embedding_dim)
-            print("Temporal Block: HybridTemporalEventAdapter active.")
-        else:
-            self.temporal_adapter = None
-            print("Temporal Block: Switched to basic mean pooling across the sequence.")
+        # 2. Khởi tạo Mô đun Không-Thời gian Lai[cite: 1]
+        self.temporal_module = HybridTemporalModule(dim=embedding_dim)
         
-        # --- ITEM 1: Text Prompt Ensembling Templates ---
-        self.templates = [
-            "A video of {}",
-            "A clip showing someone performing {}",
-            "An action of {}",
-            "A demonstration of {}",
-            "A video recording of {}",
-            "A video containing the action of {}",
-            "A prompt showing a person doing {}"
-        ]
-        
-        # Cache for precomputed text features when text tower is frozen
-        self._cached_text_features = None
+        # 3. Khởi tạo Mạng sinh câu nhắc động[cite: 1]
+        self.meta_net = MetaNet(dim=embedding_dim, num_prompt_tokens=num_prompt_tokens)
 
-    def _apply_vision_lora(self, r, alpha):
-        """Replaces Multi-Head Attention query/value weights in the Vision Transformer with LoRA layers."""
+    def _apply_lora_to_encoder(self, encoder, r, alpha, name):
+        """Áp dụng LoRA vào các ma trận Q, K, V, O của Self-Attention[cite: 1]."""
         num_injected = 0
-        for layer in self.model.vision_model.encoder.layers:
-            if hasattr(layer.self_attn, "q_proj") and hasattr(layer.self_attn, "v_proj"):
-                layer.self_attn.q_proj = LoRALinear(layer.self_attn.q_proj, r=r, alpha=alpha)
-                layer.self_attn.v_proj = LoRALinear(layer.self_attn.v_proj, r=r, alpha=alpha)
-                num_injected += 2
-        print(f"Vision Backbone: Injected {num_injected} spatial LoRA projection layers.")
+        for layer in encoder.layers:
+            attn = layer.self_attn
+            if hasattr(attn, "q_proj"):
+                attn.q_proj = LoRALinear(attn.q_proj, r=r, alpha=alpha)
+                attn.k_proj = LoRALinear(attn.k_proj, r=r, alpha=alpha)
+                attn.v_proj = LoRALinear(attn.v_proj, r=r, alpha=alpha)
+                attn.out_proj = LoRALinear(attn.out_proj, r=r, alpha=alpha)
+                num_injected += 4
+        print(f"[{name} Encoder] Đã nhúng {num_injected} ma trận LoRA hạng thấp.")
 
-    def _apply_text_lora(self, r, alpha):
-        """Replaces Multi-Head Attention query/value weights in the Text Encoder with LoRA layers."""
-        num_injected = 0
-        for layer in self.model.text_model.encoder.layers:
-            if hasattr(layer.self_attn, "q_proj") and hasattr(layer.self_attn, "v_proj"):
-                layer.self_attn.q_proj = LoRALinear(layer.self_attn.q_proj, r=r, alpha=alpha)
-                layer.self_attn.v_proj = LoRALinear(layer.self_attn.v_proj, r=r, alpha=alpha)
-                num_injected += 2
-        print(f"Text Tower: Injected {num_injected} linguistic LoRA projection layers.")
-
-    def train(self, mode: bool = True):
-        super().train(mode)
-        if mode:
-            # Crucial: Reset eval cache so training updates text LoRA weights dynamically
-            self._cached_text_features = None 
-            
-            # Force foundational parameters into evaluation constraints
-            self.model.eval()
-            
-            if self.temporal_adapter is not None:
-                self.temporal_adapter.train()
-            
-            # Explicitly turn on training mode only for custom LoRALinear layers
-            for m in self.model.modules():
-                if isinstance(m, LoRALinear):
-                    m.train()
-        return self
-
-    def _get_text_features(self, device):
-        """Generates text features dynamically or returns cached versions during evaluation."""
-        
-        # 1. EVAlUATION CACHING: Always return cache if available during eval mode
-        if not self.training and self._cached_text_features is not None:
-            return self._cached_text_features.to(device)
-            
-        # 2. STATIC TRAINING CACHING: If training but Text LoRA is frozen, we can also use cache
-        if self.training and not self.use_text_lora and self._cached_text_features is not None:
-            return self._cached_text_features.to(device)
-
-        # 3. COMPUTE EMBEDDINGS (Runs once for eval cache, or every batch if text LoRA is training)
-        stacked_embeddings = []
-        
-        # Wrap the entire generation context under no_grad if gradients aren't needed
-        context = torch.no_grad() if (not self.training or not self.use_text_lora) else contextlib.nullcontext()
-        
-        with context:
-            for template in self.templates:
-                prompts = [template.format(cls_name) for cls_name in self.class_names]
-                inputs = self.processor.tokenizer(text=prompts, padding="longest", truncation=True, return_tensors="pt")
-                
-                input_ids = inputs["input_ids"].to(device)
-                attention_mask = inputs.get("attention_mask")
-                if attention_mask is not None:
-                    attention_mask = attention_mask.to(device)
-                
-                text_outputs = self.model.text_model(input_ids=input_ids, attention_mask=attention_mask)
-                norm_features = F.normalize(text_outputs.pooler_output, p=2, dim=-1)
-                stacked_embeddings.append(norm_features)
-                
-            mean_features = torch.stack(stacked_embeddings, dim=0).mean(dim=0)
-            text_features = F.normalize(mean_features, p=2, dim=-1)
-
-        # Cache the result if we are in validation/evaluation mode
-        if not self.training:
-            self._cached_text_features = text_features.cpu() # Store on CPU to save VRAM between epochs
-            return self._cached_text_features.to(device)
-            
-        return text_features
-
-    def forward(self, pixel_values):
-        # pixel_values shape: (B, T, C, H, W)
-        B, T, C, H, W = pixel_values.shape
+    def forward(self, pixel_values, unseen_class_names=None, is_zero_shot=False):
+        B, T, C_img, H, W = pixel_values.shape
         device = pixel_values.device
         
-        # 1. Flatten B and T to map sequential frames through the 2D vision encoder
-        pixel_values = pixel_values.view(B * T, C, H, W)
+        # --- BỘ MÃ HÓA HÌNH ẢNH & MÔ ĐUN THỜI GIAN ---
+        pixel_values = pixel_values.view(B * T, C_img, H, W)
         
-        # 2. Extract spatial layout features (Vision LoRA handles internal gradients)
+        # Trích xuất đặc trưng không gian qua Vision Encoder (đã nhúng LoRA)
         vision_outputs = self.model.vision_model(pixel_values=pixel_values)
-        spatial_sequence = vision_outputs.last_hidden_state  # (B*T, S, D)
+        spatial_features = self.model.vision_model.head(vision_outputs.last_hidden_state) 
+        spatial_features = spatial_features.view(B, T, -1) 
         
-        # 3. Spatial Pooling
-        frame_features = self.model.vision_model.head(spatial_sequence)  # (B*T, D)
-        frame_features = frame_features.view(B, T, -1)  # (B, T, D)
+        # Đưa qua mô đun không-thời gian lai để lấy đặc trưng video toàn cục v (Công thức 3.14)
+        v = self.temporal_module(spatial_features) # (B, D)
         
-        # 4. Conditionally process sequence with the Temporal Adapter or perform baseline mean pooling
-        if self.use_temporal_adapter and self.temporal_adapter is not None:
-            video_features = self.temporal_adapter(frame_features)  # (B, T, D)
-            video_features = video_features.mean(dim=1)  # (B, D)
-        else:
-            video_features = frame_features.mean(dim=1)  # (B, D) directly maps to mean pooling
-
-        # 5. L2 Normalize video representations
-        video_features = F.normalize(video_features, p=2, dim=-1)
+        # [CÔNG THỨC 3.14]: Chuẩn hóa L2 đặc trưng video v_i thành \widetilde{v}_i
+        v_norm = F.normalize(v, p=2, dim=-1) # (B, D)
         
-        # 6. Dynamically generate Text features containing Text LoRA gradients (if active)
-        text_features = self._get_text_features(device)  # (Num_Classes, D)
+        # Xác định tập nhãn văn bản sử dụng
+        target_classes = unseen_class_names if is_zero_shot and unseen_class_names is not None else self.class_names
+        K = len(target_classes)
         
-        # 7. Compute contrastive logits output using the SigLIP exponential scalar multiplier
-        logit_scale = self.model.logit_scale.exp()
-        logits = (video_features @ text_features.T) * logit_scale  # (B, Num_Classes)
+        # --- CƠ CHẾ SINH CÂU NHẮC ĐỘNG & BỘ MÃ HÓA VĂN BẢN ---
+        # Sinh các token ngữ cảnh động từ v: (B, M, D)
+        delta_v = self.meta_net(v) 
+        M = self.meta_net.num_prompt_tokens
         
+        # Chuẩn bị văn bản nhãn tĩnh (sử dụng target_classes mới)
+        inputs = self.processor(text=target_classes, return_tensors="pt", padding=True, truncation=True)
+        input_ids = inputs["input_ids"].to(device)
+        attn_mask = inputs["attention_mask"].to(device)
+        
+        # Lấy embeddings tĩnh của nhãn từ SigLIP Text Model: (K, L, D)
+        with torch.no_grad():
+            word_embeds = self.model.text_model.embeddings.token_embedding(input_ids)
+        L = word_embeds.size(1)
+        
+        # Ghép nối prompt động và nhãn cho từng video trong batch
+        word_embeds = word_embeds.unsqueeze(0).expand(B, -1, -1, -1)
+        delta_v_expand = delta_v.unsqueeze(1).expand(-1, K, -1, -1)
+        
+        # Chuỗi prompt tối ưu P_k(v): (B, K, M+L, D)[cite: 1]
+        dynamic_prompts = torch.cat([delta_v_expand, word_embeds], dim=2)
+        dynamic_prompts = dynamic_prompts.view(B * K, M + L, -1)
+        
+        # Cập nhật Attention Mask
+        base_mask = attn_mask.unsqueeze(0).expand(B, -1, -1).reshape(B * K, L)
+        prompt_mask = torch.ones((B * K, M), dtype=base_mask.dtype, device=device)
+        full_mask = torch.cat([prompt_mask, base_mask], dim=1)
+        
+        # Đưa qua Text Encoder thu được vector t_{k,i} (Công thức 3.15)[cite: 1]
+        text_outputs = self.model.text_model(inputs_embeds=dynamic_prompts, attention_mask=full_mask)
+        
+        # [CÔNG THỨC 3.15]: Chuẩn hóa L2 vector nhãn văn bản thành \widetilde{t}_{k,i}[cite: 1]
+        t_features = F.normalize(text_outputs.pooler_output, p=2, dim=-1) # (B*K, D)
+        t_features = t_features.view(B, K, -1) # (B, K, D)
+        
+        # --- [CÔNG THỨC 3.16]: TÍNH ĐỘ TƯƠNG ĐỒNG VÀ PHÂN PHỐI XÁC SUẤT ---
+        # Lấy hằng số tỉ lệ e^\tau từ SigLIP[cite: 1]
+        logit_scale = self.model.logit_scale.exp() 
+        
+        # Tích vô hướng giữa \widetilde{v}_i và \widetilde{t}_{k,i} nhân với e^\tau[cite: 1]
+        # v_norm: (B, 1, D) @ t_features.T: (B, D, K) -> similarity logits: (B, K)
+        logits = torch.bmm(v_norm.unsqueeze(1), t_features.transpose(1, 2)).squeeze(1) * logit_scale
+        
+        if is_zero_shot:
+            # Trong kịch bản Zero-Shot Evaluation, tính toán trực tiếp xác suất Softmax (Công thức 3.16)[cite: 1]
+            probabilities = F.softmax(logits, dim=-1)
+            return probabilities
+            
         return logits

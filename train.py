@@ -15,6 +15,7 @@ import torch.optim as optim
 import shutil
 import random
 import numpy as np
+import datetime
 
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -25,7 +26,7 @@ try:
 except ImportError:
     wandb = None
 
-from model import Siglip2FullLoRATemporalBridge
+from model import Siglip2ActionModel
 from datasets import UCF101VideoDataset
 import test
 
@@ -62,7 +63,7 @@ def run_train_epoch(epoch, model, dataloader, criterion, optimizer, scheduler, d
     total = 0
 
     # Initialize standard automatic mixed precision gradient scaler
-    scaler = torch.amp.GradScaler()
+    scaler = torch.amp.grad_scaler.GradScaler()
 
     progress_bar = tqdm(dataloader, desc=f"Training (Epoch {epoch})", file=sys.stdout)
     for batch in progress_bar:
@@ -72,7 +73,7 @@ def run_train_epoch(epoch, model, dataloader, criterion, optimizer, scheduler, d
         optimizer.zero_grad()
 
         # Forward pass with mixed precision
-        with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
+        with torch.amp.autocast_mode.autocast(device_type="cuda", dtype=torch.float16):
             logits = model(pixel_values)
             loss = criterion(logits, labels)
         
@@ -100,7 +101,6 @@ def run_train_epoch(epoch, model, dataloader, criterion, optimizer, scheduler, d
 
 
 def main():
-    import datetime
     log_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     
     # 1. Parse unified config options from CLI arguments
@@ -216,14 +216,11 @@ def main():
     logger.info(f"Extracted unique tokens count elements targets: {len(class_names_list)}")
 
     # Initialize model with configuration settings directly from the flat configuration matrix mapping
-    model = Siglip2FullLoRATemporalBridge(
+    model = Siglip2ActionModel(
         model_name=config["model_name"],
         class_names=class_names_list,
         lora_r=config["lora_r"],
         lora_alpha=config["lora_alpha"],
-        use_vision_lora=config["vision_lora"],
-        use_text_lora=config["text_lora"],
-        use_temporal_adapter=config["temporal_module"]
     ).to(device)
 
     if wandb is not None:
