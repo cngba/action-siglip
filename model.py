@@ -166,9 +166,9 @@ class Siglip2ActionModel(nn.Module):
         self._apply_lora_to_encoder(self.model.text_model.encoder, r=lora_r, alpha=lora_alpha, name="Text")
 
         # Đóng băng CHỈ trọng số của self.model (để giữ cho temporal_module và meta_net có thể huấn luyện)
-        for name, param in self.model.named_parameters():
-            if "lora_" not in name:
-                param.requires_grad = False
+        # for name, param in self.model.named_parameters():
+        #     if "lora_" not in name:
+        #         param.requires_grad = False
 
         # 3. Khởi tạo Mô đun Không-Thời gian Lai
         self.temporal_module = HybridTemporalModule(dim=embedding_dim)
@@ -201,41 +201,49 @@ class Siglip2ActionModel(nn.Module):
         # --- BỘ MÃ HÓA HÌNH ẢNH & MÔ ĐUN THỜI GIAN ---
         pixel_values = pixel_values.view(B * T, C_img, H, W)
         
-        # Trích xuất đặc trưng không gian qua Vision Encoder (đã nhúng LoRA)
-        vision_outputs = self.model.vision_model(pixel_values=pixel_values)
-        spatial_features = self.model.vision_model.head(vision_outputs.last_hidden_state) 
-        spatial_features = spatial_features.view(B, T, -1) 
+        # Trích xuất đặc trưng không gian
+        vision_outputs = self.model.get_image_features(pixel_values=pixel_values)
+        if isinstance(vision_outputs, torch.Tensor):
+            spatial_features = vision_outputs
+        elif hasattr(vision_outputs, "image_embeds"):
+            spatial_features = vision_outputs.image_embeds # type: ignore
+        else:
+            spatial_features = vision_outputs[0]
+            
+        spatial_features = spatial_features.view(B, T, -1) # (B, T, D)
         
-        # Đưa qua mô đun không-thời gian lai để lấy đặc trưng video toàn cục v
+        # Mô đun không-thời gian lai
         v = self.temporal_module(spatial_features) # (B, D)
-        
-        # Chuẩn hóa L2 đặc trưng video v thành v_norm
         v_norm = F.normalize(v, p=2, dim=-1) # (B, D)
         
-        # Xác định tập nhãn văn bản sử dụng
+        # Xác định nhãn
         target_classes = unseen_class_names if is_zero_shot and unseen_class_names is not None else self.class_names
         K = len(target_classes)
         
         # --- CƠ CHẾ SINH CÂU NHẮC & BỘ MÃ HÓA VĂN BẢN ---
+        text_prompts = [self.manual_prompt_template.format(c) for c in target_classes]
+        inputs = self.processor(text=text_prompts, return_tensors="pt", padding=True, truncation=True).to(device)
+        input_ids = inputs["input_ids"]
+        attn_mask = inputs["attention_mask"]
+
         if self.prompt_type == "cocoop" and self.meta_net is not None:
-            # Cohort dynamic prompt generation
             delta_v = self.meta_net(v) # (B, M, D)
             M = self.meta_net.num_prompt_tokens        
                 
-            # Form static prompt text strings
-            text_prompts = [self.manual_prompt_template.format(c) for c in target_classes]
-            inputs = self.processor(text=text_prompts, return_tensors="pt", padding=True, truncation=True)
-            input_ids = inputs["input_ids"].to(device)
-            attn_mask = inputs["attention_mask"].to(device)
-            
-            with torch.no_grad():
-                word_embeds = self.model.text_model.embeddings.token_embedding(input_ids)
+            word_embeds = self.model.text_model.embeddings.token_embedding(input_ids) # (K, L, D)
             L = word_embeds.size(1)
             
-            word_embeds = word_embeds.unsqueeze(0).expand(B, -1, -1, -1)
-            delta_v_expand = delta_v.unsqueeze(1).expand(-1, K, -1, -1)
+            word_embeds = word_embeds.unsqueeze(0).expand(B, -1, -1, -1) # (B, K, L, D)
+            delta_v_expand = delta_v.unsqueeze(1).expand(-1, K, -1, -1) # (B, K, M, D)
             
-            dynamic_prompts = torch.cat([delta_v_expand, word_embeds], dim=2).view(B * K, M + L, -1)
+            combined_embeds = torch.cat([delta_v_expand, word_embeds], dim=2).view(B * K, M + L, -1)
+            
+            # Positional Embeddings
+            seq_length = M + L
+            position_ids = torch.arange(seq_length, dtype=torch.long, device=device).unsqueeze(0)
+            position_embeds = self.model.text_model.embeddings.position_embedding(position_ids)
+            
+            dynamic_prompts = combined_embeds + position_embeds
             
             base_mask = attn_mask.unsqueeze(0).expand(B, -1, -1).reshape(B * K, L)
             prompt_mask = torch.ones((B * K, M), dtype=base_mask.dtype, device=device)
@@ -243,36 +251,35 @@ class Siglip2ActionModel(nn.Module):
             
             text_outputs = self.model.text_model(inputs_embeds=dynamic_prompts, attention_mask=full_mask)
             
-            # SigLIP Pooled Output feature extraction
+            # ✅ CORRECTED POOLING FALLBACK FOR SIGLIP:
             if hasattr(text_outputs, "pooler_output") and text_outputs.pooler_output is not None:
                 raw_text_feats = text_outputs.pooler_output
+            elif hasattr(self.model.text_model, "head"):
+                raw_text_feats = self.model.text_model.head(text_outputs.last_hidden_state)
             else:
-                raw_text_feats = text_outputs.last_hidden_state[:, 0, :]
+                raw_text_feats = text_outputs.last_hidden_state[:, -1, :]
                 
             t_features = F.normalize(raw_text_feats, p=2, dim=-1).view(B, K, -1)
 
         else:  # Manual prompt flow
-            text_prompts = [self.manual_prompt_template.format(c) for c in target_classes]
-            inputs = self.processor(text=text_prompts, return_tensors="pt", padding=True, truncation=True)
-            input_ids = inputs["input_ids"].to(device)
-            attn_mask = inputs["attention_mask"].to(device)
-            
             text_outputs = self.model.text_model(input_ids=input_ids, attention_mask=attn_mask)
             
             if hasattr(text_outputs, "pooler_output") and text_outputs.pooler_output is not None:
                 raw_text_feats = text_outputs.pooler_output
+            elif hasattr(self.model.text_model, "head"):
+                raw_text_feats = self.model.text_model.head(text_outputs.last_hidden_state)
             else:
-                raw_text_feats = text_outputs.last_hidden_state[:, 0, :]
+                raw_text_feats = text_outputs.last_hidden_state[:, -1, :]
                 
-            t_features = F.normalize(raw_text_feats, p=2, dim=-1) # (K, D)
-            t_features = t_features.unsqueeze(0).expand(B, -1, -1) # (B, K, D)
+            t_features = F.normalize(raw_text_feats, p=2, dim=-1)
+            t_features = t_features.unsqueeze(0).expand(B, -1, -1)
 
-        # --- TÍNH ĐỘ TƯƠNG ĐỒNG VÀ LOGITS ---
+        # --- LOGITS & SIMILARITY ---
         logit_scale = self.model.logit_scale.exp() 
-        logits = torch.bmm(v_norm.unsqueeze(1), t_features.transpose(1, 2)).squeeze(1) * logit_scale
+        logit_bias = self.model.logit_bias
+        logits = (torch.bmm(v_norm.unsqueeze(1), t_features.transpose(1, 2)).squeeze(1) * logit_scale) + logit_bias
         
         if is_zero_shot:
-            probabilities = F.softmax(logits, dim=-1)
-            return probabilities
+            return F.softmax(logits, dim=-1)
             
         return logits

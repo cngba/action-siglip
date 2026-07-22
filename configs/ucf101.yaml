@@ -22,7 +22,7 @@ modes:
     checkpoint_dir: "./exp/siglip2_peft/ucf101/full_peft"
     log_file: "./exp/siglip2_peft/ucf101/full_peft/session.log"
     batch_size: 32
-    num_epochs: 30
+    num_epochs: 1
     lr: 5.e-5
     weight_decay: 0.01
     # Prompt Configuration
@@ -40,7 +40,7 @@ modes:
     checkpoint_dir: "./exp/siglip2_peft/ucf101/cocoop"
     log_file: "./exp/siglip2_peft/ucf101/cocoop/session.log"
     batch_size: 32
-    num_epochs: 30
+    num_epochs: 1
     lr: 5.e-5
     weight_decay: 0.01
     # Prompt Configuration
@@ -58,7 +58,7 @@ modes:
     checkpoint_dir: "./exp/siglip2_peft/ucf101/lora_r16_all"
     log_file: "./exp/siglip2_peft/ucf101/lora_r16_all/session.log"
     batch_size: 32
-    num_epochs: 30
+    num_epochs: 1
     lr: 5.e-5
     weight_decay: 0.01
     # Prompt Configuration
