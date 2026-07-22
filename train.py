@@ -4,6 +4,14 @@
 # Adapted for Level 5 Dual-Tower LoRA and Hybrid Temporal Modeling
 # Configured for Unified Mode Matrix Parsers (ucf101.yaml)
 
+"""
+Main training script for Siglip2 action recognition experiments.
+
+This file wires configuration, data loading, model initialization,
+the training loop, validation calls, checkpointing and optional
+experiment logging (Weights & Biases).
+"""
+
 import os
 import sys
 import logging
@@ -15,6 +23,8 @@ import torch.optim as optim
 import shutil
 import random
 import numpy as np
+import datetime
+from peft import LoraConfig
 
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -25,7 +35,7 @@ try:
 except ImportError:
     wandb = None
 
-from model import Siglip2FullLoRATemporalBridge
+from model import Siglip2ActionModel
 from datasets import UCF101VideoDataset
 import test
 
@@ -61,31 +71,26 @@ def run_train_epoch(epoch, model, dataloader, criterion, optimizer, scheduler, d
     correct = 0
     total = 0
 
-    # Initialize standard automatic mixed precision gradient scaler
-    scaler = torch.amp.GradScaler()
-
-    progress_bar = tqdm(dataloader, desc=f"Training (Epoch {epoch})", file=sys.stdout)
+    progress_bar = tqdm(dataloader, desc=f"Training - Epoch {epoch}", file=sys.stdout)
     for batch in progress_bar:
         pixel_values = batch["pixel_values"].to(device)
         labels = batch["label_id"].to(device)
         
         optimizer.zero_grad()
 
-        # Forward pass with mixed precision
-        with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
+        # Mixed-precision forward pass using bfloat16
+        with torch.amp.autocast_mode.autocast(device_type="cuda", dtype=torch.bfloat16): 
             logits = model(pixel_values)
             loss = criterion(logits, labels)
-        
-        # Backward pass using the gradient scaler to prevent underflow
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
-        
+
+        loss.backward()
+        optimizer.step()
+
         running_loss += loss.item()
         _, predicted = torch.max(logits, 1)
         total += labels.size(0)
         correct += (predicted == labels).sum().item()
-        
+
         progress_bar.set_postfix({
             "Loss": f"{loss.item():.4f}", 
             "Acc": f"{100 * correct / total:.2f}%"
@@ -94,13 +99,12 @@ def run_train_epoch(epoch, model, dataloader, criterion, optimizer, scheduler, d
     epoch_loss = running_loss / len(dataloader)
     epoch_acc = 100 * correct / total
 
-    # Step the learning rate scheduler once per epoch
+    # Step learning rate scheduler per epoch
     scheduler.step()
     return epoch_loss, epoch_acc
 
 
 def main():
-    import datetime
     log_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     
     # 1. Parse unified config options from CLI arguments
@@ -114,7 +118,6 @@ def main():
         
     with open(args.config, 'r') as f:
         raw_yaml = yaml.safe_load(f)
-    
     
     if "modes" not in raw_yaml or args.mode not in raw_yaml["modes"]:
         raise KeyError(f"Selected target mode configuration option '{args.mode}' not discovered in the YAML map matrix.")
@@ -130,22 +133,20 @@ def main():
         "num_workers": raw_yaml["data"]["workers"]
     }
     
-    # 3. Dynamically merge current mode specific hyper-parameters onto the flat runtime dictionary
+    # 3. Dynamically merge current mode specific hyper-parameters onto flat runtime config
     mode_specific_config = raw_yaml["modes"][args.mode]
     config.update(mode_specific_config)
     
     target_log = config.get("log_file", f"logs/{args.mode}_{log_time}.log")
     logger = setup_logger(target_log)
     logger.info(f"Loaded master configuration profile from {args.config}")
-    
     logger.info(f"Successfully compiled configuration vectors for operational target matrix: {args.mode}")
 
     # Enforce standard asset validation guards early
     if not os.path.exists(config["annotation_dir"]):
         raise FileNotFoundError(f"Missing core storage index alignment folder metadata at: {config['annotation_dir']}")
 
-    # Set seed for repeatability checks
-
+    # Set seeds for repeatability
     random.seed(config["seed"])
     np.random.seed(config["seed"])
     torch.manual_seed(config["seed"])
@@ -165,7 +166,7 @@ def main():
     run_dir = os.path.join(config["checkpoint_dir"], run_name)
     os.makedirs(run_dir, exist_ok=True)
     
-    # Backup script layouts and configs inside unique run folders for reproducibility
+    # Backup configurations and architecture scripts
     shutil.copy(args.config, os.path.join(run_dir, "ucf101_config_snapshot.yaml"))
     shutil.copy("model.py", os.path.join(run_dir, "model_arch_backup.py"))
 
@@ -198,32 +199,52 @@ def main():
     g.manual_seed(config["seed"])
 
     def worker_init_fn(worker_id):
-        # Spreads a unique, non-overlapping seed sequence across all 8 parallel workers
         worker_seed = torch.initial_seed() % 2**32
         np.random.seed(worker_seed)
         random.seed(worker_seed)
 
     num_workers = min(config["num_workers"], os.cpu_count()) if os.name != 'nt' else 0
 
-    train_loader = DataLoader(train_dataset, batch_size=config["batch_size"], shuffle=True, num_workers=num_workers, 
-    pin_memory=torch.cuda.is_available(), worker_init_fn=worker_init_fn, # <--- Pass it here
-        generator=g)
-    val_loader = DataLoader(val_dataset, batch_size=config["batch_size"], shuffle=False, num_workers=num_workers, 
-    pin_memory=torch.cuda.is_available(), worker_init_fn=worker_init_fn, # <--- Pass it here
-        generator=g)
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=config["batch_size"], 
+        shuffle=True, 
+        num_workers=num_workers, 
+        pin_memory=torch.cuda.is_available(), 
+        worker_init_fn=worker_init_fn,
+        generator=g
+    )
+    val_loader = DataLoader(
+        val_dataset, 
+        batch_size=config["batch_size"], 
+        shuffle=False, 
+        num_workers=num_workers, 
+        pin_memory=torch.cuda.is_available(), 
+        worker_init_fn=worker_init_fn,
+        generator=g
+    )
 
     class_names_list = train_dataset.unique_labels
     logger.info(f"Extracted unique tokens count elements targets: {len(class_names_list)}")
 
-    # Initialize model with configuration settings directly from the flat configuration matrix mapping
-    model = Siglip2FullLoRATemporalBridge(
+    # Construct PEFT LoraConfig object directly from parsed YAML options
+    lora_config = LoraConfig(
+        r=config["lora_r"],
+        lora_alpha=config["lora_alpha"],
+        lora_dropout=config["lora_dropout"],
+        target_modules=config["lora_target_modules"],
+        bias="none",
+        task_type="FEATURE_EXTRACTION"
+    )
+
+    # Instantiate model with explicit mode options
+    model = Siglip2ActionModel(
         model_name=config["model_name"],
         class_names=class_names_list,
-        lora_r=config["lora_r"],
-        lora_alpha=config["lora_alpha"],
-        use_vision_lora=config["vision_lora"],
-        use_text_lora=config["text_lora"],
-        use_temporal_adapter=config["temporal_module"]
+        prompt_type=config["prompt_type"],
+        manual_prompt_template=config["manual_prompt_template"],
+        cocoop_hidden_dim=config["cocoop_hidden_dim"],
+        lora_config=lora_config
     ).to(device)
 
     if wandb is not None:
@@ -245,13 +266,30 @@ def main():
             logger.info(f"Trainable: {name} | Shape: {list(param.shape)}")
 
     criterion = nn.CrossEntropyLoss()
-    temporal_params = [p for n, p in model.named_parameters() if p.requires_grad and "temporal" in n]
-    lora_params = [p for n, p in model.named_parameters() if p.requires_grad and "lora" in n]
 
-    optimizer = optim.AdamW([
+    # Dynamic parameter grouping for multi-rate optimization
+    lora_params = []
+    temporal_params = []
+    other_params = []
+
+    for n, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        if "lora" in n:
+            lora_params.append(p)
+        elif "temporal" in n:
+            temporal_params.append(p)
+        else:
+            other_params.append(p)
+
+    param_groups = [
         {"params": lora_params, "lr": config["lr"]},
-        {"params": temporal_params, "lr": config["lr"] * 2}  # Slightly higher for new weights
-    ], weight_decay=config["weight_decay"])
+        {"params": temporal_params, "lr": config["lr"] * 2},
+    ]
+    if other_params:
+        param_groups.append({"params": other_params, "lr": config["lr"]})
+
+    optimizer = optim.AdamW(param_groups, weight_decay=config["weight_decay"])    
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.get("scheduler_t_max", config["num_epochs"]))
 
     os.makedirs(config["checkpoint_dir"], exist_ok=True)
@@ -292,15 +330,24 @@ def main():
                 "val_f1": metrics["f1"]
             })
 
+        # 1. Save Lightweight periodic checkpoints (weights only)
         if epoch % 2 == 0:
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'scheduler_state_dict': scheduler.state_dict(),
                 'val_acc': metrics['top1']
             }, os.path.join(config["checkpoint_dir"], f"checkpoint_epoch_{epoch}.pt"))
 
+        # 2. Save full state to last_checkpoint.pt for quick job resume recovery
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
+            'val_acc': metrics['top1']
+        }, os.path.join(config["checkpoint_dir"], "last_checkpoint.pt"))
+
+        # 3. Preserve full state for best validation model
         if metrics['top1'] > best_val_acc:
             best_val_acc = metrics['top1']
             torch.save({

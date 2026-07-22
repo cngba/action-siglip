@@ -12,9 +12,10 @@ from torchvision.transforms import v2
 decord.bridge.set_bridge('torch')
 logger = logging.getLogger(__name__)
 
+
 class UCF101VideoDataset(Dataset):
     """
-    Custom Dataset for UCF101 Video Action Recognition adapted for official TXT splits.
+    Optimized Dataset for UCF101 using pure PyTorch Tensor transformations.
     """
     def __init__(
         self,
@@ -32,22 +33,37 @@ class UCF101VideoDataset(Dataset):
         self.num_frames = num_frames
         self.split = split
         
-        # Build 0-indexed class mappings from classInd.txt
+        # Step 1: Build the class-name to label-id mapping used by the dataset.
         self.label_to_id, self.id_to_label = self._build_class_mappings()
         self.unique_labels = sorted(list(self.label_to_id.keys()))
-        
-        # Load standard UCF101 splits
+
+        # Step 2: Load all video paths for the requested split and mode.
         self.video_list = self._load_split()
+        
+        # Step 3: Read normalization statistics from the processor so frames are standardized consistently.
+        image_processor = getattr(processor, "image_processor", processor)
+        mean = getattr(image_processor, "image_mean", [0.5, 0.5, 0.5])
+        std = getattr(image_processor, "image_std", [0.5, 0.5, 0.5])
+
+        # Step 4: Create separate augmentation pipelines for training and validation/inference.
         self.train_transforms = v2.Compose([
+            v2.RandomResizedCrop(size=(224, 224), scale=(0.8, 1.0), antialias=True),
             v2.RandomHorizontalFlip(p=0.5),
-            v2.RandomCrop(size=(224, 224)), # Or whatever size matches your architecture
+            v2.ToDtype(torch.float32, scale=True), # Scales uint8 [0, 255] to float32 [0.0, 1.0]
+            v2.Normalize(mean=mean, std=std),
+        ])
+        
+        self.val_transforms = v2.Compose([
+            v2.Resize(256, antialias=True),
+            v2.CenterCrop((224, 224)),
+            v2.ToDtype(torch.float32, scale=True), # Scales uint8 [0, 255] to float32 [0.0, 1.0]
+            v2.Normalize(mean=mean, std=std),
         ])
 
     def _build_class_mappings(self):
-        """Scans classInd.txt to build mapping of class strings to 0-indexed IDs."""
+        # Read the UCF101 class index file so each action category can be mapped to an integer label.
         class_ind_path = os.path.join(self.annotation_dir, 'classInd.txt')
-        label_to_id = {}
-        id_to_label = {}
+        label_to_id, id_to_label = {}, {}
         
         if not os.path.exists(class_ind_path):
             raise FileNotFoundError(f"Missing class definitions at: {class_ind_path}")
@@ -56,7 +72,6 @@ class UCF101VideoDataset(Dataset):
             for line in f:
                 parts = line.strip().split()
                 if len(parts) >= 2:
-                    # UCF101 standard is 1-indexed. PyTorch requires 0-indexed.
                     idx = int(parts[0]) - 1
                     label = parts[1]
                     label_to_id[label] = idx
@@ -65,7 +80,7 @@ class UCF101VideoDataset(Dataset):
         return label_to_id, id_to_label
 
     def _load_split(self):
-        """Loads trainlist or testlist txt files based on mode."""
+        # Collect the video paths and labels listed in the chosen annotation split file.
         video_list = []
         prefix = 'train' if self.mode == 'train' else 'test'
         list_file = os.path.join(self.annotation_dir, f'{prefix}list0{self.split}.txt')
@@ -75,15 +90,12 @@ class UCF101VideoDataset(Dataset):
 
         with open(list_file, 'r', encoding='utf-8') as f:
             for line in f:
+                # Each line contains a video path followed by its class name.
                 line = line.strip()
                 if not line:
                     continue
-                
-                # Split handles train lists (which have spaces and IDs) and test lists (which don't)
                 parts = line.split()
                 vid_path = parts[0]
-                
-                # Extract the class name from the folder path (e.g., ApplyEyeMakeup/...)
                 class_name = vid_path.split('/')[0]
                 
                 if class_name in self.label_to_id:
@@ -97,6 +109,7 @@ class UCF101VideoDataset(Dataset):
         return len(self.video_list)
 
     def _get_frame_indices(self, total_frames: int):
+        # Choose a fixed set of frame positions so each video is represented consistently.
         if total_frames <= self.num_frames:
             return np.linspace(0, total_frames - 1, self.num_frames, dtype=int)
 
@@ -113,53 +126,54 @@ class UCF101VideoDataset(Dataset):
         return np.array(indices)
 
     def __getitem__(self, idx):
+        # Step 1: Load the metadata for the requested video sample.
         vid_path, label_id = self.video_list[idx]
         label_str = self.id_to_label[label_id]
         
+        # Step 2: Normalize the path so it works on any operating system.
         clean_vid_path = vid_path.lstrip('/').lstrip('\\')
         clean_vid_path = clean_vid_path.replace('/', os.sep).replace('\\', os.sep)
         video_path = os.path.join(self.base_dir, clean_vid_path)
         
         try:
+            # Step 3: Open the video and sample a fixed number of frames.
             vr = VideoReader(video_path, ctx=cpu(0))
             total_frames = len(vr)
             frame_indices = self._get_frame_indices(total_frames)
-            frames = vr.get_batch(frame_indices) # Shape: (8, H, W, C)
             
-            # 1. Convert to a single PyTorch tensor: (8, C, H, W)
+            # Decord returns a tensor shaped (T, H, W, C); convert it to (T, C, H, W) for PyTorch.
+            frames = vr.get_batch(frame_indices) 
             frames_tensor = frames.permute(0, 3, 1, 2) 
             
-            # 2. Apply v2 augmentations consistently across the temporal dimension
+            # Step 4: Apply the selected augmentation and normalization pipeline.
             if self.mode == 'train':
-                frames_tensor = self.train_transforms(frames_tensor)
+                pixel_values = self.train_transforms(frames_tensor) # (T, C, 224, 224)
+            else:
+                pixel_values = self.val_transforms(frames_tensor)   # (T, C, 224, 224)
                 
-            # 3. Convert back to a list of numpy arrays for the HF processor
-            # (Since HF processors expect HWC format for raw images)
-            frames_np = [frame.permute(1, 2, 0).numpy() for frame in frames_tensor]
-            
         except Exception as e:
-            frames_np = [np.zeros((224, 224, 3), dtype=np.uint8) for _ in range(self.num_frames)]
+            # Step 5: If the video cannot be read, fall back to a zero tensor with the expected shape.
+            logger.warning(f"Error reading video {video_path}: {e}")
+            pixel_values = torch.zeros((self.num_frames, 3, 224, 224), dtype=torch.float32)
 
+        # Step 6: Build a simple text prompt for the action label and tokenize it.
         text_prompt = f"A video of a person performing {label_str}"
+        tokenizer = getattr(self.processor, "tokenizer", self.processor)
         
-        inputs = self.processor(
-            images=frames_np, 
-            text=text_prompt, 
+        text_inputs = tokenizer(
+            text_prompt, 
             return_tensors="pt", 
             padding="max_length",
             truncation=True,
             max_length=64
         )
         
-        pixel_values = inputs["pixel_values"]
-        if pixel_values.dim() == 5 and pixel_values.shape[0] == 1:
-            pixel_values = pixel_values.squeeze(0)
-            
-        input_ids = inputs["input_ids"].squeeze(0)
-        attention_mask = inputs["attention_mask"].squeeze(0) if "attention_mask" in inputs else None
+        input_ids = text_inputs["input_ids"].squeeze(0)
+        attention_mask = text_inputs["attention_mask"].squeeze(0) if "attention_mask" in text_inputs else None
 
+        # Step 7: Return a dictionary in the format expected by the training pipeline.
         item = {
-            "pixel_values": pixel_values,
+            "pixel_values": pixel_values, # Output is directly a (8, 3, 224, 224) float32 Tensor
             "input_ids": input_ids,
             "label_id": torch.tensor(label_id, dtype=torch.long)
         }
