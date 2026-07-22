@@ -21,7 +21,7 @@ class LoRALinear(nn.Module):
         self.lora_A = nn.Parameter(torch.zeros(r, in_features))
         self.lora_B = nn.Parameter(torch.zeros(out_features, r))
 
-        # Khởi tạo ma trận A theo phân phối Kaiming Uniform, B bằng 0[cite: 1]
+        # Khởi tạo ma trận A theo phân phối Kaiming Uniform, B bằng 0
         nn.init.kaiming_uniform_(self.lora_A, a=5**0.5)
         nn.init.zeros_(self.lora_B)
 
@@ -33,12 +33,12 @@ class LoRALinear(nn.Module):
 
 class HybridTemporalModule(nn.Module):
     """
-    Mô đun Không-Thời gian Lai chuyển giao từ học không gian sang học không-thời gian[cite: 1].
+    Mô đun Không-Thời gian Lai chuyển giao từ học không gian sang học không-thời gian.
     """
     def __init__(self, dim=768, num_heads=8, kernel_size=3):
         super().__init__()
         
-        # 1. Nhánh trích xuất đặc trưng cục bộ (Conv1D)[cite: 1]
+        # 1. Nhánh trích xuất đặc trưng cục bộ (Conv1D)
         self.conv = nn.Conv1d(
             in_channels=dim,
             out_channels=dim,
@@ -46,20 +46,20 @@ class HybridTemporalModule(nn.Module):
             padding=kernel_size // 2
         )
         
-        # 2. Nhánh trích xuất tương quan toàn cục (MHSA)[cite: 1]
+        # 2. Nhánh trích xuất tương quan toàn cục (MHSA)
         self.attn = nn.MultiheadAttention(
             embed_dim=dim,
             num_heads=num_heads,
             batch_first=True
         )
         
-        # Các hệ số vô hướng học được khởi tạo bằng 0.1[cite: 1]
+        # Các hệ số vô hướng học được khởi tạo bằng 0.1
         self.alpha = nn.Parameter(torch.tensor(0.1))
         self.beta = nn.Parameter(torch.tensor(0.1))
         
         self.norm = nn.LayerNorm(dim)
         
-        # Mạng GRU hai chiều với kích thước ẩn C/2 để đầu ra đồng nhất C[cite: 1]
+        # Mạng GRU hai chiều với kích thước ẩn C/2 để đầu ra đồng nhất C
         self.gru = nn.GRU(
             input_size=dim,
             hidden_size=dim // 2,
@@ -67,8 +67,9 @@ class HybridTemporalModule(nn.Module):
             batch_first=True
         )
         
-        # Vector truy vấn cho Attention Pooling[cite: 1]
+        # Vector truy vấn cho Attention Pooling
         self.q_pool = nn.Parameter(torch.randn(dim, 1))
+        nn.init.trunc_normal_(self.q_pool, std=0.02)
 
     def forward(self, x):
         # X shape: (B, T, C)
@@ -103,18 +104,21 @@ class HybridTemporalModule(nn.Module):
 
 class MetaNet(nn.Module):
     """
-    Mạng Meta-Net sinh các token ngữ cảnh động từ đặc trưng video[cite: 1].
+    Mạng Meta-Net sinh các token ngữ cảnh động từ đặc trưng video.
     """
     def __init__(self, dim, num_prompt_tokens=4):
         super().__init__()
         self.num_prompt_tokens = num_prompt_tokens
         self.dim = dim
-        # Cấu trúc MLP gồm 2 tầng tuyến tính kết hợp hàm kích hoạt ReLU[cite: 1]
+        # Cấu trúc MLP gồm 2 tầng tuyến tính kết hợp hàm kích hoạt ReLU
         self.net = nn.Sequential(
             nn.Linear(dim, dim),
             nn.ReLU(),
             nn.Linear(dim, num_prompt_tokens * dim)
         )
+
+        nn.init.zeros_(self.net[-1].weight)
+        nn.init.zeros_(self.net[-1].bias)
 
     def forward(self, v):
         # Đầu vào v: (B, C), Đầu ra: (B, M, C)
@@ -125,7 +129,7 @@ class MetaNet(nn.Module):
 
 class Siglip2ActionModel(nn.Module):
     """
-    Hệ thống nhận dạng hành vi người dựa trên SigLIP 2, LoRA, và Không-Thời gian Lai[cite: 1].
+    Hệ thống nhận dạng hành vi người dựa trên SigLIP 2, LoRA, và Không-Thời gian Lai.
     """
     def __init__(
         self, 
@@ -137,10 +141,10 @@ class Siglip2ActionModel(nn.Module):
     ):
         super().__init__()
         if class_names is None:
-            raise ValueError("Cần cung cấp danh sách class_names.")
+            raise ValueError("class_names list required.")
         self.class_names = class_names
         
-        # Tải mô hình nền tảng SigLIP 2[cite: 1]
+        # Tải mô hình nền tảng SigLIP 2
         self.model = SiglipModel.from_pretrained(model_name)
         self.processor = AutoProcessor.from_pretrained(model_name)
         
@@ -152,23 +156,23 @@ class Siglip2ActionModel(nn.Module):
         else:
             embedding_dim = getattr(self.model.config, "hidden_size", 768)
 
-        # 1. Tích hợp LoRA cho Vision và Text Encoder (Q, K, V, O)[cite: 1]
+        # 1. Tích hợp LoRA cho Vision và Text Encoder (Q, K, V, O)
         self._apply_lora_to_encoder(self.model.vision_model.encoder, r=lora_r, alpha=lora_alpha, name="Vision")
         self._apply_lora_to_encoder(self.model.text_model.encoder, r=lora_r, alpha=lora_alpha, name="Text")
 
-        # Đóng băng toàn bộ trọng số gốc, chỉ huấn luyện tham số LoRA[cite: 1]
+        # Đóng băng toàn bộ trọng số gốc, chỉ huấn luyện tham số LoRA
         for name, param in self.model.named_parameters():
             if "lora_" not in name:
                 param.requires_grad = False
 
-        # 2. Khởi tạo Mô đun Không-Thời gian Lai[cite: 1]
+        # 2. Khởi tạo Mô đun Không-Thời gian Lai
         self.temporal_module = HybridTemporalModule(dim=embedding_dim)
         
-        # 3. Khởi tạo Mạng sinh câu nhắc động[cite: 1]
+        # 3. Khởi tạo Mạng sinh câu nhắc động
         self.meta_net = MetaNet(dim=embedding_dim, num_prompt_tokens=num_prompt_tokens)
 
     def _apply_lora_to_encoder(self, encoder, r, alpha, name):
-        """Áp dụng LoRA vào các ma trận Q, K, V, O của Self-Attention[cite: 1]."""
+        """Áp dụng LoRA vào các ma trận Q, K, V, O của Self-Attention."""
         num_injected = 0
         for layer in encoder.layers:
             attn = layer.self_attn
@@ -178,7 +182,7 @@ class Siglip2ActionModel(nn.Module):
                 attn.v_proj = LoRALinear(attn.v_proj, r=r, alpha=alpha)
                 attn.out_proj = LoRALinear(attn.out_proj, r=r, alpha=alpha)
                 num_injected += 4
-        print(f"[{name} Encoder] Đã nhúng {num_injected} ma trận LoRA hạng thấp.")
+        print(f"[{name} Encoder] {num_injected} LoRA matrices injected.")
 
     def forward(self, pixel_values, unseen_class_names=None, is_zero_shot=False):
         B, T, C_img, H, W = pixel_values.shape
@@ -221,7 +225,7 @@ class Siglip2ActionModel(nn.Module):
         word_embeds = word_embeds.unsqueeze(0).expand(B, -1, -1, -1)
         delta_v_expand = delta_v.unsqueeze(1).expand(-1, K, -1, -1)
         
-        # Chuỗi prompt tối ưu P_k(v): (B, K, M+L, D)[cite: 1]
+        # Chuỗi prompt tối ưu P_k(v): (B, K, M+L, D)
         dynamic_prompts = torch.cat([delta_v_expand, word_embeds], dim=2)
         dynamic_prompts = dynamic_prompts.view(B * K, M + L, -1)
         
@@ -230,23 +234,23 @@ class Siglip2ActionModel(nn.Module):
         prompt_mask = torch.ones((B * K, M), dtype=base_mask.dtype, device=device)
         full_mask = torch.cat([prompt_mask, base_mask], dim=1)
         
-        # Đưa qua Text Encoder thu được vector t_{k,i} (Công thức 3.15)[cite: 1]
+        # Đưa qua Text Encoder thu được vector t_{k,i} (Công thức 3.15)
         text_outputs = self.model.text_model(inputs_embeds=dynamic_prompts, attention_mask=full_mask)
         
-        # [CÔNG THỨC 3.15]: Chuẩn hóa L2 vector nhãn văn bản thành \widetilde{t}_{k,i}[cite: 1]
+        # [CÔNG THỨC 3.15]: Chuẩn hóa L2 vector nhãn văn bản thành \widetilde{t}_{k,i}
         t_features = F.normalize(text_outputs.pooler_output, p=2, dim=-1) # (B*K, D)
         t_features = t_features.view(B, K, -1) # (B, K, D)
         
         # --- [CÔNG THỨC 3.16]: TÍNH ĐỘ TƯƠNG ĐỒNG VÀ PHÂN PHỐI XÁC SUẤT ---
-        # Lấy hằng số tỉ lệ e^\tau từ SigLIP[cite: 1]
+        # Lấy hằng số tỉ lệ e^\tau từ SigLIP
         logit_scale = self.model.logit_scale.exp() 
         
-        # Tích vô hướng giữa \widetilde{v}_i và \widetilde{t}_{k,i} nhân với e^\tau[cite: 1]
+        # Tích vô hướng giữa \widetilde{v}_i và \widetilde{t}_{k,i} nhân với e^\tau
         # v_norm: (B, 1, D) @ t_features.T: (B, D, K) -> similarity logits: (B, K)
         logits = torch.bmm(v_norm.unsqueeze(1), t_features.transpose(1, 2)).squeeze(1) * logit_scale
         
         if is_zero_shot:
-            # Trong kịch bản Zero-Shot Evaluation, tính toán trực tiếp xác suất Softmax (Công thức 3.16)[cite: 1]
+            # Trong kịch bản Zero-Shot Evaluation, tính toán trực tiếp xác suất Softmax (Công thức 3.16)
             probabilities = F.softmax(logits, dim=-1)
             return probabilities
             

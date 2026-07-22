@@ -13,7 +13,7 @@ data:
   # base_dir: "/root/data/UCF-101"                 # Path to your actual video files folder
   # annotation_dir: "/root/data/ucfTrainTestlist"   # Path to the folder containing the .txt list files
   split: 1                                  # Target split number (matches trainlist01.txt / testlist01.txt)
-  workers: 8
+  workers: 1
 
 # ==============================================================================
 # Mode Matrices (Train, Zero-Shot, and Specific Ablations)
@@ -27,7 +27,6 @@ modes:
     num_epochs: 30
     lr: 5.e-5
     weight_decay: 0.01
-    # Architecture Switches (Corrected to match train.py runtime keys)
     vision_lora: true
     text_lora: true
     temporal_module: true

@@ -62,25 +62,16 @@ def run_train_epoch(epoch, model, dataloader, criterion, optimizer, scheduler, d
     correct = 0
     total = 0
 
-    # Initialize standard automatic mixed precision gradient scaler
-    scaler = torch.amp.grad_scaler.GradScaler()
-
-    progress_bar = tqdm(dataloader, desc=f"Training (Epoch {epoch})", file=sys.stdout)
+    progress_bar = tqdm(dataloader, desc=f"Training - Epoch {epoch}", file=sys.stdout)
     for batch in progress_bar:
         pixel_values = batch["pixel_values"].to(device)
         labels = batch["label_id"].to(device)
         
         optimizer.zero_grad()
 
-        # Forward pass with mixed precision
-        with torch.amp.autocast_mode.autocast(device_type="cuda", dtype=torch.float16):
+        with torch.amp.autocast_mode.autocast(device_type="cuda", dtype=torch.bfloat16): 
             logits = model(pixel_values)
             loss = criterion(logits, labels)
-        
-        # Backward pass using the gradient scaler to prevent underflow
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
         
         running_loss += loss.item()
         _, predicted = torch.max(logits, 1)
@@ -145,7 +136,6 @@ def main():
         raise FileNotFoundError(f"Missing core storage index alignment folder metadata at: {config['annotation_dir']}")
 
     # Set seed for repeatability checks
-
     random.seed(config["seed"])
     np.random.seed(config["seed"])
     torch.manual_seed(config["seed"])
