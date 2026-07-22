@@ -10,16 +10,14 @@ data:
   num_segments: 8
   base_dir: "C:\\Users\\CONG\\source\\data\\UCF101\\UCF-101"
   annotation_dir: "C:\\Users\\CONG\\source\\data\\ucfTrainTestlist"
-  # base_dir: "/root/data/UCF-101"                 # Path to your actual video files folder
-  # annotation_dir: "/root/data/ucfTrainTestlist"   # Path to the folder containing the .txt list files
-  split: 1                                  # Target split number (matches trainlist01.txt / testlist01.txt)
+  split: 1                                  
   workers: 1
 
 # ==============================================================================
 # Mode Matrices (Train, Zero-Shot, and Specific Ablations)
 # ==============================================================================
 modes:
-  # 1. Full Parameter-Efficient Fine-Tuning Setup
+  # 1. Standard PEFT Baseline with Manual Text Prompts
   train_full_peft:
     checkpoint_dir: "./exp/siglip2_peft/ucf101/full_peft"
     log_file: "./exp/siglip2_peft/ucf101/full_peft/session.log"
@@ -27,80 +25,48 @@ modes:
     num_epochs: 30
     lr: 5.e-5
     weight_decay: 0.01
-    vision_lora: true
-    text_lora: true
-    temporal_module: true
+    # Prompt Configuration
+    prompt_type: "manual"
+    manual_prompt_template: "A video of a person performing {}"
+    cocoop_hidden_dim: 512
+    # LoRA Configuration
     lora_r: 4
     lora_alpha: 8.0
+    lora_dropout: 0.05
+    lora_target_modules: ["q_proj", "v_proj"]
 
-  # 2. Pure Baseline Zero-Shot Performance (Triggers safety guard to stop training)
-  zero_shot:
-    checkpoint_dir: "./exp/siglip2_peft/ucf101/zeroshot"
-    log_file: "./exp/siglip2_peft/ucf101/zeroshot/session.log"
-    batch_size: 64 # Double batch size since no backward graph takes up VRAM
-    num_epochs: 1
-    lr: 0.0
-    weight_decay: 0.0
-    # Architecture Switches (Turn everything off)
-    vision_lora: false
-    text_lora: false
-    temporal_module: false
-    lora_r: 0
-    lora_alpha: 0.0
-
-  # 3. Ablation Variant Example: Modulating Temporal Dynamics Only
-  ablation_temporal_only:
-    checkpoint_dir: "./exp/siglip2_peft/ucf101/temporal_only"
-    log_file: "./exp/siglip2_peft/ucf101/temporal_only/session.log"
+  # 2. CoCoOp Prompt Learning Ablation
+  ablation_cocoop:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/cocoop"
+    log_file: "./exp/siglip2_peft/ucf101/cocoop/session.log"
     batch_size: 32
     num_epochs: 30
-    lr: 1.e-4 # Higher LR works fine since only the tiny adapter is trained
+    lr: 5.e-5
     weight_decay: 0.01
-    # Architecture Switches
-    vision_lora: false
-    text_lora: false
-    temporal_module: true
-    lora_r: 0
-    lora_alpha: 0.0
-
-  ablation_no_text:
-    checkpoint_dir: "./exp/siglip2_peft/ucf101/no_text"
-    log_file: "./exp/siglip2_peft/ucf101/no_text/session.log"
-    batch_size: 32
-    num_epochs: 30
-    lr: 5.e-5 # Higher LR works fine since only the tiny adapter is trained
-    weight_decay: 0.01
-    # Architecture Switches
-    vision_lora: true
-    text_lora: false
-    temporal_module: true
+    # Prompt Configuration
+    prompt_type: "cocoop"
+    manual_prompt_template: "A video of a person performing {}"
+    cocoop_hidden_dim: 512
+    # LoRA Configuration
     lora_r: 4
     lora_alpha: 8.0
+    lora_dropout: 0.05
+    lora_target_modules: ["q_proj", "v_proj"]
 
-  ablation_no_vision:
-    checkpoint_dir: "./exp/siglip2_peft/ucf101/no_vision"
-    log_file: "./exp/siglip2_peft/ucf101/no_vision/session.log"
+  # 3. High-Rank LoRA Ablation (All Projections)
+  ablation_lora_r16_all:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/lora_r16_all"
+    log_file: "./exp/siglip2_peft/ucf101/lora_r16_all/session.log"
     batch_size: 32
     num_epochs: 30
-    lr: 5.e-5 
+    lr: 5.e-5
     weight_decay: 0.01
-    # Architecture Switches
-    vision_lora: false
-    text_lora: true
-    temporal_module: true
-    lora_r: 4
-    lora_alpha: 8.0
-
-  ablation_no_temporal:
-    checkpoint_dir: "./exp/siglip2_peft/ucf101/no_temporal"
-    log_file: "./exp/siglip2_peft/ucf101/no_temporal/session.log"
-    batch_size: 32
-    num_epochs: 30
-    lr: 5.e-5 
-    weight_decay: 0.01
-    # Architecture Switches
-    vision_lora: true
-    text_lora: true
-    temporal_module: false
-    lora_r: 4
-    lora_alpha: 8.0
+    # Prompt Configuration
+    prompt_type: "manual"
+    manual_prompt_template: "A video of a person performing {}"
+    cocoop_hidden_dim: 512
+    # LoRA Configuration
+    lora_r: 16
+    lora_alpha: 32.0
+    lora_dropout: 0.1
+    lora_target_modules: ["q_proj", "k_proj", "v_proj", "out_proj"]

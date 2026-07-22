@@ -17,6 +17,7 @@ import random
 from tqdm import tqdm
 from torch.utils.data import DataLoader
 from transformers import AutoProcessor
+from peft import LoraConfig
 from sklearn.metrics import precision_recall_fscore_support, accuracy_score
 
 # Prevent diagnostic network verification calls over HTTPS layers
@@ -68,7 +69,7 @@ def validate(epoch, dataloader, model, device, unseen_class_names=None, is_zero_
     start_time = time.time()
     total_videos = 0
 
-    # Lựa chọn tập nhãn mục tiêu dựa trên kịch bản đánh giá
+    # Target class selection based on scenario
     target_classes = unseen_class_names if is_zero_shot and unseen_class_names is not None else model.class_names
     class_to_idx = {name: idx for idx, name in enumerate(target_classes)}
 
@@ -77,7 +78,6 @@ def validate(epoch, dataloader, model, device, unseen_class_names=None, is_zero_
     for batch in tqdm(dataloader, desc=desc_msg, file=sys.stdout):
         pixel_values = batch["pixel_values"].to(device)
         
-        # Xử lý nhãn tương ứng với kịch bản
         if is_zero_shot and "label_name" in batch:
             raw_labels = batch["label_name"]
             labels = torch.tensor([class_to_idx[lbl] for lbl in raw_labels], dtype=torch.long).to(device)
@@ -86,9 +86,8 @@ def validate(epoch, dataloader, model, device, unseen_class_names=None, is_zero_
             
         total_videos += labels.size(0)
         
-        # Forward pass sử dụng Mixed Precision tăng tốc phần cứng
-        with torch.amp.autocast_mode.autocast(device_type="cuda", dtype=torch.float16):
-            # model tự động tính toán v_norm, t_norm và nhân logit_scale bên trong
+        # Mixed Precision Forward Pass
+        with torch.amp.autocast_mode.autocast(device_type="cuda", dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16):
             logits = model(pixel_values, unseen_class_names=unseen_class_names, is_zero_shot=is_zero_shot)
         
         _, predicted = torch.max(logits, 1)
@@ -103,17 +102,17 @@ def validate(epoch, dataloader, model, device, unseen_class_names=None, is_zero_
     all_labels = np.array(all_labels)
     all_preds = np.array(all_preds)
     
-    # 1. Top-1 Target Calculation (Công thức 3.17)
+    # 1. Top-1 Target Calculation
     top1_acc = accuracy_score(all_labels, all_preds) * 100
     
-    # 2. Top-5 Target Calculation
+    # 2. Top-5 Target Calculation (dynamically bounded by class count)
     num_classes = all_logits.shape[1]
     k = min(5, num_classes)
     _, topk_indices = torch.topk(all_logits, k, dim=1)
     topk_correct = topk_indices.eq(torch.tensor(all_labels).view(-1, 1)).sum().item()
     top5_acc = (topk_correct / total_videos) * 100
 
-    # 3. Macro Target Precision, Recall, và F1 calculations
+    # 3. Macro Target Precision, Recall, and F1 calculations
     precision, recall, f1, _ = precision_recall_fscore_support(
         all_labels, all_preds, average='macro', zero_division=0
     )
@@ -122,9 +121,9 @@ def validate(epoch, dataloader, model, device, unseen_class_names=None, is_zero_
     recall_pct = recall * 100
     f1_pct = f1 * 100
 
-    # Console prints and logging tracking elements configurations
+    # Console output and logging
     report_title = "DETAILED ZERO-SHOT REPORT" if is_zero_shot else "DETAILED PERFORMANCE REPORT"
-    report_header = "\n" + "="*50 + f"\n            {report_title} (DYNAMIC PROMPTS)           \n" + "="*50
+    report_header = "\n" + "="*50 + f"\n            {report_title}            \n" + "="*50
     print(report_header)
     print(f"Top-1 Accuracy:  {top1_acc:.2f}%")
     print(f"Top-5 Accuracy:  {top5_acc:.2f}%")
@@ -173,6 +172,7 @@ if __name__ == "__main__":
     if "modes" not in raw_yaml or args.mode not in raw_yaml["modes"]:
         raise KeyError(f"Selected target mode configuration option '{args.mode}' not discovered in the YAML map matrix.")
 
+    # Flatten runtime configuration
     config = {
         "model_name": raw_yaml.get("model_name", "google/siglip2-base-patch16-224"),
         "seed": raw_yaml.get("seed", 1024),
@@ -186,7 +186,7 @@ if __name__ == "__main__":
     mode_specific_config = raw_yaml["modes"][args.mode]
     config.update(mode_specific_config)
     
-    setup_logging(os.path.dirname(config["log_file"]))
+    setup_logging(os.path.dirname(config.get("log_file", f"logs/{args.mode}_eval.log")))
     logging.info(f"Loaded master configuration profile for evaluation mode: {args.mode}")
 
     torch.manual_seed(config["seed"])
@@ -232,16 +232,26 @@ if __name__ == "__main__":
         generator=g
     )
 
-    # Đọc danh sách nhãn hành vi từ Dataset
     class_list = val_dataset.unique_labels
     
-    # Khởi tạo Siglip2ActionModel đồng bộ với file model.py mới
+    # Construct PEFT LoraConfig matching model/train setup
+    lora_config = LoraConfig(
+        r=config["lora_r"],
+        lora_alpha=config["lora_alpha"],
+        lora_dropout=config["lora_dropout"],
+        target_modules=config["lora_target_modules"],
+        bias="none",
+        task_type="FEATURE_EXTRACTION"
+    )
+
+    # Initialize model matching model.py signature
     model = Siglip2ActionModel(
         model_name=config["model_name"], 
         class_names=class_list,
-        lora_r=config["lora_r"],
-        lora_alpha=config["lora_alpha"],
-        num_prompt_tokens=config.get("num_prompt_tokens", 4)
+        prompt_type=config["prompt_type"],
+        manual_prompt_template=config["manual_prompt_template"],
+        cocoop_hidden_dim=config["cocoop_hidden_dim"],
+        lora_config=lora_config
     ).to(device)
 
     current_epoch = 0
@@ -249,8 +259,6 @@ if __name__ == "__main__":
 
     if is_zs_mode:
         logging.info("Executing pure Zero-Shot baseline performance evaluation over unseen action domains.")
-        # Giả sử bạn chuẩn bị sẵn một danh sách các nhãn chưa từng thấy cho kịch bản học không mẫu
-        # Nếu bộ dữ liệu val_dataset đã lọc sẵn lớp unseen, ta lấy trực tiếp class_list làm unseen_classes
         unseen_classes = config.get("unseen_class_names", class_list)
     else:
         checkpoint_target = args.weights if args.weights else os.path.join(config["checkpoint_dir"], "best_model.pt")
@@ -271,7 +279,7 @@ if __name__ == "__main__":
             config=config
         )
 
-    # Thực hiện gọi hàm kiểm định cấu trúc hình học thực tế
+    # Execute evaluation pass
     validate(
         epoch=current_epoch, 
         dataloader=val_loader, 
