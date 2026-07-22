@@ -64,7 +64,7 @@ def setup_logger(log_file):
     
     return logger
 
-def run_train_epoch(epoch, model, dataloader, criterion, optimizer, scheduler, device):
+def run_train_epoch(epoch, model, dataloader, criterion, optimizer, scheduler, scaler, device):
     """Runs a single training epoch optimization pass."""
     model.train()
     running_loss = 0.0
@@ -77,14 +77,14 @@ def run_train_epoch(epoch, model, dataloader, criterion, optimizer, scheduler, d
         labels = batch["label_id"].to(device)
         
         optimizer.zero_grad()
-
-        # Mixed-precision forward pass using bfloat16
-        with torch.amp.autocast_mode.autocast(device_type="cuda", dtype=torch.bfloat16): 
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16 if device.type == "cuda" else torch.float32):
             logits = model(pixel_values)
             loss = criterion(logits, labels)
 
-        loss.backward()
-        optimizer.step()
+        # Scale loss and backpropagate safely using GradScaler
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
 
         running_loss += loss.item()
         _, predicted = torch.max(logits, 1)
@@ -168,7 +168,9 @@ def main():
     
     # Backup configurations and architecture scripts
     shutil.copy(args.config, os.path.join(run_dir, "ucf101_config_snapshot.yaml"))
-    shutil.copy("model.py", os.path.join(run_dir, "model_arch_backup.py"))
+    model_py_path = os.path.join(os.path.dirname(__file__), "model.py")
+    if os.path.exists(model_py_path):
+        shutil.copy(model_py_path, os.path.join(run_dir, "model_arch_backup.py"))
 
     if wandb is not None:
         wandb.init(
@@ -195,8 +197,8 @@ def main():
         mode='val'
     )
 
-    g = torch.Generator()
-    g.manual_seed(config["seed"])
+    g_train = torch.Generator().manual_seed(config["seed"])
+    g_val = torch.Generator().manual_seed(config["seed"])
 
     def worker_init_fn(worker_id):
         worker_seed = torch.initial_seed() % 2**32
@@ -212,7 +214,7 @@ def main():
         num_workers=num_workers, 
         pin_memory=torch.cuda.is_available(), 
         worker_init_fn=worker_init_fn,
-        generator=g
+        generator=g_train
     )
     val_loader = DataLoader(
         val_dataset, 
@@ -221,7 +223,7 @@ def main():
         num_workers=num_workers, 
         pin_memory=torch.cuda.is_available(), 
         worker_init_fn=worker_init_fn,
-        generator=g
+        generator=g_val
     )
 
     class_names_list = train_dataset.unique_labels
@@ -292,6 +294,10 @@ def main():
     optimizer = optim.AdamW(param_groups, weight_decay=config["weight_decay"])    
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.get("scheduler_t_max", config["num_epochs"]))
 
+    # Initialize GradScaler once at the beginning of training
+    # use torch.cuda.amp.GradScaler (torch.amp.GradScaler is not exported)
+    scaler = torch.cuda.amp.GradScaler()
+
     os.makedirs(config["checkpoint_dir"], exist_ok=True)
     start_epoch = 1
     best_val_acc = 0.0
@@ -311,7 +317,9 @@ def main():
 
     for epoch in range(start_epoch, config["num_epochs"] + 1):
         logger.info(f"--- Starting Epoch {epoch}/{config['num_epochs']} ---")
-        train_loss, train_acc = run_train_epoch(epoch, model, train_loader, criterion, optimizer, scheduler, device)
+        train_loss, train_acc = run_train_epoch(
+            epoch, model, train_loader, criterion, optimizer, scheduler, scaler, device
+        )
         
         metrics = test.validate(epoch, val_loader, model, device)
         
@@ -336,7 +344,7 @@ def main():
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'val_acc': metrics['top1']
-            }, os.path.join(config["checkpoint_dir"], f"checkpoint_epoch_{epoch}.pt"))
+            }, os.path.join(run_dir, f"checkpoint_epoch_{epoch}.pt"))
 
         # 2. Save full state to last_checkpoint.pt for quick job resume recovery
         torch.save({
@@ -345,7 +353,7 @@ def main():
             'optimizer_state_dict': optimizer.state_dict(),
             'scheduler_state_dict': scheduler.state_dict(),
             'val_acc': metrics['top1']
-        }, os.path.join(config["checkpoint_dir"], "last_checkpoint.pt"))
+        }, os.path.join(run_dir, "last_checkpoint.pt"))
 
         # 3. Preserve full state for best validation model
         if metrics['top1'] > best_val_acc:
@@ -356,7 +364,7 @@ def main():
                 'optimizer_state_dict': optimizer.state_dict(),
                 'scheduler_state_dict': scheduler.state_dict(),
                 'val_acc': best_val_acc
-            }, os.path.join(config["checkpoint_dir"], "best_model.pt"))
+            }, os.path.join(run_dir, "best_model.pt"))
             logger.info(f"New best model saved into check-points with validation score: {best_val_acc:.2f}%")
 
     if wandb is not None:
