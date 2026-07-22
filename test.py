@@ -12,6 +12,7 @@ import argparse
 import logging
 import torch
 import torch.nn.functional as F
+import torch.nn as nn
 import numpy as np
 import random
 from tqdm import tqdm
@@ -69,10 +70,12 @@ def validate(epoch, dataloader, model, device, unseen_class_names=None, is_zero_
     start_time = time.time()
     total_videos = 0
 
-    # Target class selection based on scenario
-    target_classes = unseen_class_names if is_zero_shot and unseen_class_names is not None else model.class_names
+    # SAFEGUARD: Extract underlying model if wrapped in DataParallel
+    base_model = getattr(model, "module", model)
+    target_classes = unseen_class_names if is_zero_shot and unseen_class_names is not None else base_model.class_names
     class_to_idx = {name: idx for idx, name in enumerate(target_classes)}
 
+    # Target class selection based on scenario
     desc_msg = f"Zero-Shot Evaluation" if is_zero_shot else f"Validation (Epoch {epoch})"
     
     for batch in tqdm(dataloader, desc=desc_msg, file=sys.stdout):
@@ -86,8 +89,8 @@ def validate(epoch, dataloader, model, device, unseen_class_names=None, is_zero_
             
         total_videos += labels.size(0)
         
-        # Mixed Precision Forward Pass
-        with torch.amp.autocast_mode.autocast(device_type="cuda", dtype=torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16):
+        # Modern PyTorch Autocast API
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16 if device.type == "cuda" else torch.float32):
             logits = model(pixel_values, unseen_class_names=unseen_class_names, is_zero_shot=is_zero_shot)
         
         _, predicted = torch.max(logits, 1)
@@ -213,15 +216,20 @@ if __name__ == "__main__":
         mode='val'
     )
     
-    g = torch.Generator()
-    g.manual_seed(config["seed"])
+    g_val = torch.Generator()
+    g_val.manual_seed(config["seed"])
 
     def worker_init_fn(worker_id):
         worker_seed = torch.initial_seed() % 2**32
         np.random.seed(worker_seed)
         random.seed(worker_seed)
 
-    num_workers = min(config["num_workers"], os.cpu_count()) if os.name != 'nt' else 0
+    if hasattr(os, 'sched_getaffinity'):
+        allocated_cpus = len(os.sched_getaffinity(0)) #type:ignore
+        num_workers = min(config["num_workers"], allocated_cpus)
+    else:
+        num_workers = min(config["num_workers"], os.cpu_count()) if os.name != 'nt' else 0
+
     val_loader = DataLoader(
         val_dataset, 
         batch_size=config["batch_size"], 
@@ -229,7 +237,7 @@ if __name__ == "__main__":
         num_workers=num_workers, 
         pin_memory=torch.cuda.is_available(),
         worker_init_fn=worker_init_fn,
-        generator=g
+        generator=g_val
     )
 
     class_list = val_dataset.unique_labels
@@ -265,11 +273,22 @@ if __name__ == "__main__":
         if checkpoint_target and os.path.isfile(checkpoint_target):
             logging.info(f"Loading fine-tuned checkpoint weights directly from: {checkpoint_target}")
             checkpoint = torch.load(checkpoint_target, map_location=device, weights_only=False)
-            model.load_state_dict(checkpoint['model_state_dict'])
+            
+            # SAFEGUARD: Strip 'module.' prefix if the model was trained with DataParallel
+            state_dict = checkpoint['model_state_dict']
+            clean_state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
+            
+            model.load_state_dict(clean_state_dict)
             current_epoch = checkpoint.get('epoch', 0)
         else:
             logging.warning(f"No checkpoint matched at destination: '{checkpoint_target}'. "
                             f"Evaluating vanilla pre-trained weights instead.")
+
+    # Accelerate inference if multiple GPUs are available
+    if torch.cuda.device_count() > 1:
+        logging.info(f"Multi-GPU detected! Wrapping model in DataParallel for faster evaluation.")
+        model = nn.DataParallel(model)
+
 
     if wandb:
         project_name = "action-siglip2-zeroshot" if is_zs_mode else "action-siglip2-peft-eval"

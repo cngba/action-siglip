@@ -64,45 +64,51 @@ def setup_logger(log_file):
     
     return logger
 
-def run_train_epoch(epoch, model, dataloader, criterion, optimizer, scheduler, scaler, device):
-    """Runs a single training epoch optimization pass."""
+def run_train_epoch(epoch, model, dataloader, criterion, optimizer, scheduler, device, accumulation_steps=1):
+    """Runs a single training epoch optimization pass with bfloat16 and gradient accumulation."""
     model.train()
     running_loss = 0.0
     correct = 0
     total = 0
+    
+    optimizer.zero_grad() # Move zero_grad outside the loop for accumulation
 
     progress_bar = tqdm(dataloader, desc=f"Training - Epoch {epoch}", file=sys.stdout)
-    for batch in progress_bar:
+    for i, batch in enumerate(progress_bar):
         pixel_values = batch["pixel_values"].to(device)
         labels = batch["label_id"].to(device)
         
-        optimizer.zero_grad()
-        with torch.autocast(device_type="cuda", dtype=torch.bfloat16 if device.type == "cuda" else torch.float32):
+        # Native bfloat16 on A100 requires no scaler
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             logits = model(pixel_values)
             loss = criterion(logits, labels)
+            
+            # Normalize loss for accumulation
+            loss = loss / accumulation_steps
 
-        # Scale loss and backpropagate safely using GradScaler
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
+        # Standard backward pass (no scaler needed for bf16)
+        loss.backward()
 
-        running_loss += loss.item()
+        if (i + 1) % accumulation_steps == 0 or (i + 1) == len(dataloader):
+            optimizer.step()
+            optimizer.zero_grad()
+
+        # Track metrics (multiply by accumulation_steps to get true loss value for logging)
+        running_loss += (loss.item() * accumulation_steps)
         _, predicted = torch.max(logits, 1)
         total += labels.size(0)
         correct += (predicted == labels).sum().item()
 
         progress_bar.set_postfix({
-            "Loss": f"{loss.item():.4f}", 
+            "Loss": f"{(loss.item() * accumulation_steps):.4f}", 
             "Acc": f"{100 * correct / total:.2f}%"
         })
         
     epoch_loss = running_loss / len(dataloader)
     epoch_acc = 100 * correct / total
 
-    # Step learning rate scheduler per epoch
     scheduler.step()
     return epoch_loss, epoch_acc
-
 
 def main():
     log_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -205,7 +211,12 @@ def main():
         np.random.seed(worker_seed)
         random.seed(worker_seed)
 
-    num_workers = min(config["num_workers"], os.cpu_count()) if os.name != 'nt' else 0
+    # FIX: Use sched_getaffinity to get actual Slurm-allocated CPUs on Linux
+    if hasattr(os, 'sched_getaffinity'):
+        allocated_cpus = len(os.sched_getaffinity(0)) #type:ignore
+        num_workers = min(config["num_workers"], allocated_cpus)
+    else:
+        num_workers = min(config["num_workers"], os.cpu_count()) if os.name != 'nt' else 0
 
     train_loader = DataLoader(
         train_dataset, 
@@ -247,7 +258,14 @@ def main():
         manual_prompt_template=config["manual_prompt_template"],
         cocoop_hidden_dim=config["cocoop_hidden_dim"],
         lora_config=lora_config
-    ).to(device)
+    )
+    
+    # NEW: Automatically utilize multiple A100s if allocated by Slurm
+    if torch.cuda.device_count() > 1:
+        logger.info(f"Multi-GPU detected! Wrapping model in DataParallel using {torch.cuda.device_count()} GPUs.")
+        model = nn.DataParallel(model)
+        
+    model = model.to(device)
 
     if wandb is not None:
         wandb.watch(model, log="gradients", log_freq=100)
@@ -294,10 +312,6 @@ def main():
     optimizer = optim.AdamW(param_groups, weight_decay=config["weight_decay"])    
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.get("scheduler_t_max", config["num_epochs"]))
 
-    # Initialize GradScaler once at the beginning of training
-    # use torch.cuda.amp.GradScaler (torch.amp.GradScaler is not exported)
-    scaler = torch.cuda.amp.GradScaler()
-
     os.makedirs(config["checkpoint_dir"], exist_ok=True)
     start_epoch = 1
     best_val_acc = 0.0
@@ -318,7 +332,7 @@ def main():
     for epoch in range(start_epoch, config["num_epochs"] + 1):
         logger.info(f"--- Starting Epoch {epoch}/{config['num_epochs']} ---")
         train_loss, train_acc = run_train_epoch(
-            epoch, model, train_loader, criterion, optimizer, scheduler, scaler, device
+            epoch, model, train_loader, criterion, optimizer, scheduler, device
         )
         
         metrics = test.validate(epoch, val_loader, model, device)
@@ -338,11 +352,12 @@ def main():
                 "val_f1": metrics["f1"]
             })
 
+        state_dict_to_save = model.module.state_dict() if hasattr(model, 'module') else model.state_dict()
         # 1. Save Lightweight periodic checkpoints (weights only)
         if epoch % 2 == 0:
             torch.save({
                 'epoch': epoch,
-                'model_state_dict': model.state_dict(),
+                'model_state_dict': state_dict_to_save,
                 'val_acc': metrics['top1']
             }, os.path.join(run_dir, f"checkpoint_epoch_{epoch}.pt"))
 
