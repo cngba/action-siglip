@@ -29,6 +29,7 @@ from peft import LoraConfig
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import AutoProcessor
+import matplotlib.pyplot as plt
 
 try:
     import wandb
@@ -80,6 +81,7 @@ def run_train_epoch(epoch, model, dataloader, criterion, optimizer, scheduler, d
         
         # Native bfloat16 on A100 requires no scaler
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+
             logits = model(pixel_values)
             loss = criterion(logits, labels)
             

@@ -144,7 +144,16 @@ class Siglip2ActionModel(nn.Module):
         pixel_values = pixel_values.view(B * T, C_img, H, W)
         
         # get_image_features handles ViT encoding, MAP pooling, AND visual_projection automatically
-        image_embeds = self.model.get_image_features(pixel_values=pixel_values) 
+        image_embeds = self.model.get_image_features(pixel_values=pixel_values)
+
+        # Safely extract the tensor if a ModelOutput object is returned
+        if not isinstance(image_embeds, torch.Tensor):
+            if hasattr(image_embeds, "pooler_output") and image_embeds.pooler_output is not None:
+                image_embeds = image_embeds.pooler_output
+            elif hasattr(image_embeds, "image_embeds"):
+                image_embeds = image_embeds.image_embeds
+            else:
+                image_embeds = image_embeds[0] 
         
         # Reshape the fully processed spatial features back to temporal sequences
         spatial_features = image_embeds.view(B, T, -1) # type: ignore
@@ -159,7 +168,16 @@ class Siglip2ActionModel(nn.Module):
         text_prompts = [self.manual_prompt_template.format(c) for c in target_classes]
         inputs = self.processor(text=text_prompts, return_tensors="pt", padding=True, truncation=True).to(device)
         input_ids = inputs["input_ids"]
-        attn_mask = inputs["attention_mask"]
+
+        # Safely extract attention_mask or create it manually if missing
+        if "attention_mask" in inputs:
+            attn_mask = inputs["attention_mask"]
+        else:
+            pad_token_id = self.processor.tokenizer.pad_token_id
+            if pad_token_id is None:
+                pad_token_id = 0  # Fallback if tokenizer has no pad_token_id set
+            attn_mask = (input_ids != pad_token_id).long()
+        # attn_mask = inputs["attention_mask"]
 
         if self.prompt_type == "cocoop" and self.meta_net is not None:
             delta_v = self.meta_net(v) # (B, M, D)
@@ -202,6 +220,21 @@ class Siglip2ActionModel(nn.Module):
 
         else:  # Manual prompt flow
             text_outputs = self.model.get_text_features(input_ids=input_ids, attention_mask=attn_mask)
+
+            # Safely extract the pooled and projected text embeddings
+            if not isinstance(text_outputs, torch.Tensor):
+                if hasattr(text_outputs, "text_embeds") and text_outputs.text_embeds is not None:
+                    text_outputs = text_outputs.text_embeds
+                elif hasattr(text_outputs, "pooler_output") and text_outputs.pooler_output is not None:
+                    # If we only have pooler_output, we must manually apply the SigLIP text projection
+                    text_outputs = text_outputs.pooler_output
+                    if hasattr(self.model, "text_projection"):
+                        text_outputs = self.model.text_projection(text_outputs)
+                else:
+                    # Fallback for tuples: [0] is usually last_hidden_state, [1] is pooler_output
+                    text_outputs = text_outputs[1] 
+                    if hasattr(self.model, "text_projection"):
+                        text_outputs = self.model.text_projection(text_outputs)
             
             if not isinstance(text_outputs, torch.Tensor):
                 text_outputs = text_outputs[0]
