@@ -112,8 +112,17 @@ class Siglip2ActionModel(nn.Module):
 
         lora_r = getattr(lora_config, "r", 4)
         lora_alpha = getattr(lora_config, "lora_alpha", 8.0)
-        self._apply_lora_to_encoder(self.model.vision_model.encoder, r=lora_r, alpha=lora_alpha, name="Vision")
-        self._apply_lora_to_encoder(self.model.text_model.encoder, r=lora_r, alpha=lora_alpha, name="Text")
+        # 1. Đọc danh sách target modules từ config
+        lora_targets = getattr(lora_config, "target_modules", []) 
+
+        # 2. Kiểm tra: Chỉ tiêm LoRA nếu r > 0 VÀ danh sách targets không rỗng
+        if lora_r > 0 and len(lora_targets) > 0:
+            print(f"Applying LoRA (r={lora_r}, alpha={lora_alpha}) to {lora_targets}...")
+            # Truyền thêm tham số target_modules vào hàm
+            self._apply_lora_to_encoder(self.model.vision_model.encoder, r=lora_r, alpha=lora_alpha, name="Vision", target_modules=lora_targets)
+            self._apply_lora_to_encoder(self.model.text_model.encoder, r=lora_r, alpha=lora_alpha, name="Text", target_modules=lora_targets)
+        else:
+            print("LoRA is disabled (r=0 or empty targets). Base model is fully frozen.")
 
         self.temporal_module = HybridTemporalModule(dim=embedding_dim)
         
@@ -124,16 +133,31 @@ class Siglip2ActionModel(nn.Module):
         else:
             raise ValueError(f"Unsupported prompt_type: {self.prompt_type}")
 
-    def _apply_lora_to_encoder(self, encoder, r, alpha, name):
+    def _apply_lora_to_encoder(self, encoder, r, alpha, name, target_modules):
         num_injected = 0
         for layer in encoder.layers:
             attn = layer.self_attn
-            if hasattr(attn, "q_proj"):
+            
+            # CHỈ tiêm nếu config có yêu cầu "q_proj"
+            if hasattr(attn, "q_proj") and "q_proj" in target_modules:
                 attn.q_proj = LoRALinear(attn.q_proj, r=r, alpha=alpha)
+                num_injected += 1
+                
+            # CHỈ tiêm nếu config có yêu cầu "k_proj"
+            if hasattr(attn, "k_proj") and "k_proj" in target_modules:
                 attn.k_proj = LoRALinear(attn.k_proj, r=r, alpha=alpha)
+                num_injected += 1
+                
+            # CHỈ tiêm nếu config có yêu cầu "v_proj"
+            if hasattr(attn, "v_proj") and "v_proj" in target_modules:
                 attn.v_proj = LoRALinear(attn.v_proj, r=r, alpha=alpha)
+                num_injected += 1
+                
+            # CHỈ tiêm nếu config có yêu cầu "out_proj"
+            if hasattr(attn, "out_proj") and "out_proj" in target_modules:
                 attn.out_proj = LoRALinear(attn.out_proj, r=r, alpha=alpha)
-                num_injected += 4
+                num_injected += 1
+                
         print(f"[{name} Encoder] {num_injected} LoRA matrices injected.")
 
     def forward(self, pixel_values, unseen_class_names=None, is_zero_shot=False):
@@ -209,6 +233,27 @@ class Siglip2ActionModel(nn.Module):
                 seq_lengths = full_mask.sum(dim=-1).to(torch.long) - 1
                 batch_indices = torch.arange(text_outputs.last_hidden_state.shape[0], device=device)
                 pooled_text = text_outputs.last_hidden_state[batch_indices, seq_lengths, :]
+
+            ## --- CUSTOM FORWARD PASS ĐỂ LÁCH LUẬT CỦA HUGGING FACE ---
+            
+            # # 1. Biến đổi attention mask từ 2D sang 4D để Encoder có thể hiểu
+            # extended_attention_mask = full_mask[:, None, None, :].to(dtype=dynamic_prompts.dtype)
+            # extended_attention_mask = (1.0 - extended_attention_mask) * torch.finfo(dynamic_prompts.dtype).min
+            
+            # # 2. Bypass text_model, đẩy thẳng embedding vào lõi Encoder
+            # encoder_outputs = self.model.text_model.encoder(
+            #     inputs_embeds=dynamic_prompts,
+            #     attention_mask=extended_attention_mask
+            # )
+            # last_hidden_state = encoder_outputs[0]
+            
+            # # 3. Chạy qua lớp LayerNorm cuối cùng (bắt buộc của SigLIP)
+            # last_hidden_state = self.model.text_model.final_layer_norm(last_hidden_state)
+            
+            # # 4. Trích xuất text feature (lấy token cuối cùng dựa trên mask)
+            # seq_lengths = full_mask.sum(dim=-1).to(torch.long) - 1
+            # batch_indices = torch.arange(last_hidden_state.shape[0], device=device)
+            # pooled_text = last_hidden_state[batch_indices, seq_lengths, :]
                 
             # Crucial: Apply SigLIP's text projection to align with the visual space
             if hasattr(self.model, "text_projection"):
