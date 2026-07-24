@@ -8,10 +8,10 @@ data:
   dataset: "ucf101"
   num_classes: 101
   num_segments: 8
-  base_dir: "C:\\Users\\CONG\\source\\data\\UCF101\\UCF-101"
-  annotation_dir: "C:\\Users\\CONG\\source\\data\\ucfTrainTestlist"
+  base_dir: "/root/data/UCF-101"
+  annotation_dir: "/root/data/ucfTrainTestlist"
   split: 1                                  
-  workers: 1
+  workers: 8
 
 # ==============================================================================
 # Mode Matrices (Train, Zero-Shot, and Specific Ablations)
@@ -67,6 +67,23 @@ modes:
     cocoop_hidden_dim: 512
     # LoRA Configuration
     lora_r: 16
+    lora_alpha: 32.0
+    lora_dropout: 0.1
+    lora_target_modules: ["q_proj", "k_proj", "v_proj", "out_proj"]
+
+  hypertuning_batch_size16:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/hypertuning_batch_size16"
+    log_file: "./exp/siglip2_peft/ucf101/lora_r16_all/session.log"
+    batch_size: 16
+    num_epochs: 30
+    lr: 1.e-5
+    weight_decay: 0.01
+    # Prompt Configuration
+    prompt_type: "manual"
+    manual_prompt_template: "A video of a person performing {}"
+    cocoop_hidden_dim: 512
+    # LoRA Configuration
+    lora_r: 64
     lora_alpha: 32.0
     lora_dropout: 0.1
     lora_target_modules: ["q_proj", "k_proj", "v_proj", "out_proj"]

@@ -29,7 +29,6 @@ from peft import LoraConfig
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import AutoProcessor
-import matplotlib.pyplot as plt
 
 try:
     import wandb
@@ -64,6 +63,27 @@ def setup_logger(log_file):
     logger.addHandler(stream_handler)
     
     return logger
+
+class EarlyStopping:
+    """Dừng huấn luyện sớm nếu điểm validation không cải thiện sau số epoch chỉ định."""
+    def __init__(self, patience=5, min_delta=0.0):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.counter = 0
+        self.best_score = None
+        self.early_stop = False
+
+    def __call__(self, score, logger):
+        if self.best_score is None:
+            self.best_score = score
+        elif score < self.best_score + self.min_delta:
+            self.counter += 1
+            logger.info(f"EarlyStopping counter: {self.counter} out of {self.patience}")
+            if self.counter >= self.patience:
+                self.early_stop = True
+        else:
+            self.best_score = score
+            self.counter = 0
 
 def run_train_epoch(epoch, model, dataloader, criterion, optimizer, scheduler, device, accumulation_steps=1):
     """Runs a single training epoch optimization pass with bfloat16 and gradient accumulation."""
@@ -318,6 +338,11 @@ def main():
     start_epoch = 1
     best_val_acc = 0.0
 
+    # KHỞI TẠO EARLY STOPPING TẠI ĐÂY
+    patience = config.get("early_stopping_patience", 5)
+    early_stopping = EarlyStopping(patience=patience, min_delta=0.1) 
+    logger.info(f"Early Stopping enabled with patience: {patience}")
+
     if config.get("resume") and os.path.isfile(config["resume"]):
         logger.info(f"Restoring optimization execution checkpoint data state vectors from: {config['resume']}")
         checkpoint = torch.load(config["resume"], map_location=device, weights_only=False)
@@ -383,6 +408,11 @@ def main():
                 'val_acc': best_val_acc
             }, os.path.join(run_dir, "best_model.pt"))
             logger.info(f"New best model saved into check-points with validation score: {best_val_acc:.2f}%")
+
+        early_stopping(metrics['top1'], logger)
+        if early_stopping.early_stop:
+            logger.info(f"Early stopping triggered! Đã {early_stopping.patience} epochs không có sự cải thiện nào.")
+            break # Thoát khỏi vòng lặp huấn luyện
 
     if wandb is not None:
         wandb.finish()
