@@ -311,7 +311,7 @@ def main():
 
     # Dynamic parameter grouping for multi-rate optimization
     lora_params = []
-    temporal_params = []
+    custom_head_params = [] 
     other_params = []
 
     for n, p in model.named_parameters():
@@ -320,13 +320,13 @@ def main():
         if "lora" in n:
             lora_params.append(p)
         elif "temporal" in n:
-            temporal_params.append(p)
+            custom_head_params.append(p)
         else:
             other_params.append(p)
 
     param_groups = [
         {"params": lora_params, "lr": config["lr"]},
-        {"params": temporal_params, "lr": config["lr"] * 2},
+        {"params": custom_head_params, "lr": config["lr"] * 2},
     ]
     if other_params:
         param_groups.append({"params": other_params, "lr": config["lr"]})
@@ -356,10 +356,12 @@ def main():
         start_epoch = checkpoint['epoch'] + 1
         best_val_acc = checkpoint.get('val_acc', 0.0)
 
+    accumulation_steps = config.get("accumulation_steps", 1)
+
     for epoch in range(start_epoch, config["num_epochs"] + 1):
         logger.info(f"--- Starting Epoch {epoch}/{config['num_epochs']} ---")
         train_loss, train_acc = run_train_epoch(
-            epoch, model, train_loader, criterion, optimizer, scheduler, device
+            epoch, model, train_loader, criterion, optimizer, scheduler, device, accumulation_steps
         )
         
         metrics = test.validate(epoch, val_loader, model, device)
