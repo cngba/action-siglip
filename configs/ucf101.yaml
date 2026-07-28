@@ -25,7 +25,7 @@ modes:
     log_file: "./exp/siglip2_peft/ucf101/no_lora/session.log"
     
     unfreeze_backbone: false
-    prompt_type: "cocoop"
+    prompt_type: "manual"
     manual_prompt_template: "A video of a person performing {}"
     cocoop_hidden_dim: 512
     
@@ -35,23 +35,23 @@ modes:
     lora_target_modules: []
 
     # --- Tuning Parameters ---
-    batch_size: 32              # [TUNING] 32, 64 (Chọn mức tối đa GPU chịu được)
+    batch_size: 16              # [TUNING] 16, 32, 64 (Chọn mức tối đa GPU chịu được)
     accumulation_steps: 1       # Giữ nguyên 1 nếu batch_size = 32 chạy ổn
     lr_base: 0.0                # Không dùng đến vì base đã đóng băng
     lr_head: 1.0e-3             # [TUNING] 5e-4, 1e-3, 3e-3
-    weight_decay: 0.01          # [TUNING] 0.01, 0.05
-    num_epochs: 30
+    weight_decay: 0.1           # [TUNING] 0.01, 0.05, 0.1
+    num_epochs: 10
     early_stopping_patience: 5
 
   # ---------------------------------------------------------
   # MODE 2: WITH LORA (Frozen Base + LoRA + Train Custom Heads)
   # ---------------------------------------------------------
-  tuning_with_lora:
-    checkpoint_dir: "./exp/siglip2_peft/ucf101/with_lora"
-    log_file: "./exp/siglip2_peft/ucf101/with_lora/session.log"
+  tuning_with_lora_weight_decay_0.1:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/tuning_with_lora_weight_decay_0.1"
+    log_file: "./exp/siglip2_peft/ucf101/tuning_with_lora_weight_decay_0.1/session.log"
     
     unfreeze_backbone: false
-    prompt_type: "cocoop"
+    prompt_type: "manual"
     manual_prompt_template: "A video of a person performing {}"
     cocoop_hidden_dim: 512
     
@@ -62,23 +62,25 @@ modes:
     lora_target_modules: ["q_proj", "v_proj"]
 
     # --- Tuning Parameters ---
-    batch_size: 32              # [TUNING] 16, 32 (Mục tiêu: Effective Batch = 32)
-    accumulation_steps: 1       # [TUNING] 2, 1 (Nếu batch_size=16 thì set cái này = 2)
+    batch_size: 32              # [TUNING] 16, 32, 64 (Mục tiêu: Effective Batch = 32)
+    accumulation_steps: 2       # [TUNING] 2, 1 (Nếu batch_size=16 thì set cái này = 2)
     lr_base: 3.0e-4             # [TUNING] 1e-4, 3e-4, 5e-4 (Cho LoRA params)
-    lr_head: 1.5e-3             # [TUNING] 5e-4, 1e-3, 2e-3 (Cho Temporal/MetaNet)
-    weight_decay: 0.01          # [TUNING] 0.01, 0.05
-    num_epochs: 30
+    lr_head: 2.0e-3             # [TUNING] 5e-4, 1e-3, 2e-3 (Cho Temporal/MetaNet)
+    weight_decay: 0.1          # [TUNING] 0.01, 0.05, 0.1
+    num_epochs: 10
     early_stopping_patience: 5
 
   # ---------------------------------------------------------
   # MODE 3: FULL FINE-TUNING (Unfrozen Base + Train Custom Heads)
   # ---------------------------------------------------------
-  tuning_fft:
-    checkpoint_dir: "./exp/siglip2_peft/ucf101/fft"
-    log_file: "./exp/siglip2_peft/ucf101/fft/session.log"
+  tuning_fft_weight_decay_0.05:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/tuning_fft_weight_decay_0.05"
+    log_file: "./exp/siglip2_peft/ucf101/tuning_fft_weight_decay_0.05/session.log"
+
+    # resume: "./exp/siglip2_peft/ucf101/tuning_fft_batch_size_16/20260728_180843_tuning_fft_batch_size_16_8f/last_checkpoint.pt"
     
     unfreeze_backbone: true     # QUAN TRỌNG: Mở khóa SigLIP
-    prompt_type: "cocoop"
+    prompt_type: "manual"
     manual_prompt_template: "A video of a person performing {}"
     cocoop_hidden_dim: 512
     
@@ -90,8 +92,8 @@ modes:
     # --- Tuning Parameters ---
     batch_size: 8               # [TUNING] 4, 8, 16 (Dễ bị Out of Memory nhất)
     accumulation_steps: 4       # [TUNING] 8, 4, 2 (Chỉnh sao cho: batch_size * accumulation_steps = 32)
-    lr_base: 2.0e-5             # [TUNING] 1e-6, 1e-5, 2e-5, 5e-5 (Base nhạy cảm, cần LR siêu nhỏ)
+    lr_base: 1.0e-6             # [TUNING] 1e-6, 1e-5, 2e-5, 5e-5 (Base nhạy cảm, cần LR siêu nhỏ)
     lr_head: 3.0e-4             # [TUNING] 1e-4, 3e-4, 5e-4
-    weight_decay: 0.01          # [TUNING] 0.01, 0.05
-    num_epochs: 30
+    weight_decay: 0.05          # [TUNING] 0.01, 0.05, 0.1
+    num_epochs: 10
     early_stopping_patience: 5

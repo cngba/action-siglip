@@ -87,7 +87,8 @@ class Siglip2ActionModel(nn.Module):
         prompt_type: str,
         manual_prompt_template: str,
         cocoop_hidden_dim: int,
-        lora_config: LoraConfig
+        lora_config: LoraConfig,
+        unfreeze_backbone: bool = False
     ):
         super().__init__()
         if class_names is None:
@@ -99,8 +100,12 @@ class Siglip2ActionModel(nn.Module):
         self.model = SiglipModel.from_pretrained(model_name)
         self.processor = AutoProcessor.from_pretrained(model_name)
         
-        for param in self.model.parameters():
-            param.requires_grad = False
+        if not unfreeze_backbone:
+            for param in self.model.parameters():
+                param.requires_grad = False
+            print("Backbone SigLIP is FROZEN.")
+        else:
+            print("Backbone SigLIP is UNFROZEN for Full Fine-Tuning!")
 
         text_config = getattr(self.model.config, "text_config", None)
         if isinstance(text_config, dict):

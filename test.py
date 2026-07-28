@@ -213,7 +213,8 @@ if __name__ == "__main__":
         processor=processor, 
         split=config["split"],
         num_frames=config["num_frames"], 
-        mode='val'
+        mode='test',
+        prompt_template=config.get("manual_prompt_template", "A video of a person performing {}")
     )
     
     g_val = torch.Generator()
@@ -259,7 +260,8 @@ if __name__ == "__main__":
         prompt_type=config["prompt_type"],
         manual_prompt_template=config["manual_prompt_template"],
         cocoop_hidden_dim=config["cocoop_hidden_dim"],
-        lora_config=lora_config
+        lora_config=lora_config,
+        unfreeze_backbone=config.get("unfreeze_backbone", False)
     ).to(device)
 
     current_epoch = 0

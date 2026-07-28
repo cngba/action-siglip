@@ -289,7 +289,8 @@ def main():
         prompt_type=config["prompt_type"],
         manual_prompt_template=config["manual_prompt_template"],
         cocoop_hidden_dim=config["cocoop_hidden_dim"],
-        lora_config=lora_config
+        lora_config=lora_config,
+        unfreeze_backbone=config.get("unfreeze_backbone", False)
     )
     
     # NEW: Automatically utilize multiple A100s if allocated by Slurm
