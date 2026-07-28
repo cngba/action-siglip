@@ -23,6 +23,7 @@ import torch.optim as optim
 import shutil
 import random
 import numpy as np
+import time
 import datetime
 from peft import LoraConfig
 
@@ -87,6 +88,10 @@ class EarlyStopping:
 
 def run_train_epoch(epoch, model, dataloader, criterion, optimizer, scheduler, device, accumulation_steps=1):
     """Runs a single training epoch optimization pass with bfloat16 and gradient accumulation."""
+    # Reset bộ đếm VRAM ở đầu mỗi epoch
+    if torch.cuda.is_available():
+        torch.cuda.reset_peak_memory_stats()
+
     model.train()
     running_loss = 0.0
     correct = 0
@@ -129,8 +134,13 @@ def run_train_epoch(epoch, model, dataloader, criterion, optimizer, scheduler, d
     epoch_loss = running_loss / len(dataloader)
     epoch_acc = 100 * correct / total
 
+    # Ở cuối hàm, ngay trước phần return
+    peak_vram = 0.0
+    if torch.cuda.is_available():
+        peak_vram = torch.cuda.max_memory_allocated() / (1024 ** 3) # Đổi sang GB
+
     scheduler.step()
-    return epoch_loss, epoch_acc
+    return epoch_loss, epoch_acc, peak_vram
 
 def main():
     log_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -307,6 +317,13 @@ def main():
         if param.requires_grad:
             logger.info(f"Trainable: {name} | Shape: {list(param.shape)}")
 
+    # Đếm tổng số lượng tham số học được (đơn vị: triệu tham số - M)
+    total_trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total_params = sum(p.numel() for p in model.parameters())
+    
+    logger.info(f"Total Parameters: {total_params / 1e6:.2f} M")
+    logger.info(f"Trainable Parameters: {total_trainable_params / 1e6:.2f} M ({(total_trainable_params/total_params)*100:.2f}%)")
+
     criterion = nn.CrossEntropyLoss()
 
     # Dynamic parameter grouping for multi-rate optimization
@@ -360,12 +377,18 @@ def main():
 
     for epoch in range(start_epoch, config["num_epochs"] + 1):
         logger.info(f"--- Starting Epoch {epoch}/{config['num_epochs']} ---")
-        train_loss, train_acc = run_train_epoch(
+
+        start_time = time.time() # Bắt đầu bấm giờ
+
+        train_loss, train_acc, peak_vram = run_train_epoch(
             epoch, model, train_loader, criterion, optimizer, scheduler, device, accumulation_steps
         )
         
         metrics = test.validate(epoch, val_loader, model, device)
-        
+
+        epoch_time = time.time() - start_time # Kết thúc bấm giờ (giây)
+
+        logger.info(f"Epoch Time: {epoch_time:.2f}s | Peak VRAM: {peak_vram:.2f} GB")
         logger.info(f"Epoch Summary -> Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%")
         logger.info(f"Val Summary   -> Top-1: {metrics['top1']:.2f}% | Top-5: {metrics['top5']:.2f}% | F1: {metrics['f1']:.2f}%")
 
@@ -378,7 +401,9 @@ def main():
                 "train_acc": train_acc,
                 "val_top1": metrics["top1"],
                 "val_top5": metrics["top5"],
-                "val_f1": metrics["f1"]
+                "val_f1": metrics["f1"],
+                "epoch_time_seconds": epoch_time,
+                "peak_vram_gb": peak_vram
             })
 
         state_dict_to_save = model.module.state_dict() if hasattr(model, 'module') else model.state_dict()
