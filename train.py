@@ -336,17 +336,19 @@ def main():
             continue
         if "lora" in n:
             lora_params.append(p)
-        elif "temporal" in n:
+        elif "temporal" in n or "meta_net" in n:
             custom_head_params.append(p)
         else:
             other_params.append(p)
 
+    # Đọc trực tiếp lr_base và lr_head từ config
     param_groups = [
-        {"params": lora_params, "lr": config["lr"]},
-        {"params": custom_head_params, "lr": config["lr"] * 2},
+        {"params": lora_params, "lr": config.get("lr_base", 1e-4)},
+        {"params": custom_head_params, "lr": config.get("lr_head", 1e-3)},
     ]
     if other_params:
-        param_groups.append({"params": other_params, "lr": config["lr"]})
+        # FFT sẽ rơi vào other_params, dùng lr_base
+        param_groups.append({"params": other_params, "lr": config.get("lr_base", 1e-4)})
 
     optimizer = optim.AdamW(param_groups, weight_decay=config["weight_decay"])    
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.get("scheduler_t_max", config["num_epochs"]))
