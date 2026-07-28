@@ -25,7 +25,9 @@ class UCF101VideoDataset(Dataset):
         split: int = 1,  
         mode: str = 'train',
         num_frames: int = 8,
+        prompt_template: str = "A video of a person performing {}" # Thêm tham số này
     ):
+        self.prompt_template = prompt_template # Lưu lại template
         self.base_dir = base_dir
         self.annotation_dir = annotation_dir
         self.processor = processor
@@ -80,9 +82,9 @@ class UCF101VideoDataset(Dataset):
         return label_to_id, id_to_label
 
     def _load_split(self):
-        # Collect the video paths and labels listed in the chosen annotation split file.
         video_list = []
-        prefix = 'train' if self.mode == 'train' else 'test'
+        # Chống Leakage: Test dùng testlist, Train và Val dùng chung trainlist
+        prefix = 'test' if self.mode == 'test' else 'train'
         list_file = os.path.join(self.annotation_dir, f'{prefix}list0{self.split}.txt')
         
         if not os.path.exists(list_file):
@@ -90,7 +92,6 @@ class UCF101VideoDataset(Dataset):
 
         with open(list_file, 'r', encoding='utf-8') as f:
             for line in f:
-                # Each line contains a video path followed by its class name.
                 line = line.strip()
                 if not line:
                     continue
@@ -101,6 +102,20 @@ class UCF101VideoDataset(Dataset):
                 if class_name in self.label_to_id:
                     label_id = self.label_to_id[class_name]
                     video_list.append((vid_path, label_id))
+
+        # --- XỬ LÝ CHIA 80/20 CHO TRAIN VÀ VAL ---
+        if self.mode in ['train', 'val']:
+            # Sử dụng random cục bộ với seed cố định để đảm bảo file chia luôn giống nhau 
+            # ở mọi lần chạy, không làm ảnh hưởng đến random global của PyTorch.
+            rng = random.Random(42)
+            rng.shuffle(video_list)
+            
+            split_idx = int(len(video_list) * 0.8) # 80% Train
+            
+            if self.mode == 'train':
+                video_list = video_list[:split_idx]
+            elif self.mode == 'val':
+                video_list = video_list[split_idx:]
 
         logger.info(f"Loaded {len(video_list)} videos for mode '{self.mode}' from split {self.split}.")
         return video_list
@@ -157,7 +172,7 @@ class UCF101VideoDataset(Dataset):
             pixel_values = torch.zeros((self.num_frames, 3, 224, 224), dtype=torch.float32)
 
         # Step 6: Build a simple text prompt for the action label and tokenize it.
-        text_prompt = f"A video of a person performing {label_str}"
+        text_prompt = self.prompt_template.format(label_str)
         tokenizer = getattr(self.processor, "tokenizer", self.processor)
         
         text_inputs = tokenizer(

@@ -14,76 +14,84 @@ data:
   workers: 8
 
 # ==============================================================================
-# Mode Matrices (Train, Zero-Shot, and Specific Ablations)
+# Mode Matrices for Hyperparameter Tuning & Baselines
 # ==============================================================================
 modes:
-  # 1. Standard PEFT Baseline with Manual Text Prompts
-  train_full_peft:
-    checkpoint_dir: "./exp/siglip2_peft/ucf101/full_peft"
-    log_file: "./exp/siglip2_peft/ucf101/full_peft/session.log"
-    batch_size: 32
-    num_epochs: 1
-    lr: 5.e-5
-    weight_decay: 0.01
-    # Prompt Configuration
-    prompt_type: "manual"
-    manual_prompt_template: "A video of a person performing {}"
-    cocoop_hidden_dim: 512
-    # LoRA Configuration
-    lora_r: 4
-    lora_alpha: 8.0
-    lora_dropout: 0.05
-    lora_target_modules: ["q_proj", "v_proj"]
-
-  # 2. CoCoOp Prompt Learning Ablation
-  ablation_cocoop:
-    checkpoint_dir: "./exp/siglip2_peft/ucf101/cocoop"
-    log_file: "./exp/siglip2_peft/ucf101/cocoop/session.log"
-    batch_size: 32
-    num_epochs: 1
-    lr: 5.e-5
-    weight_decay: 0.01
-    # Prompt Configuration
+  # ---------------------------------------------------------
+  # MODE 1: NO LORA (Frozen Base + Train Custom Heads)
+  # ---------------------------------------------------------
+  tuning_no_lora:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/no_lora"
+    log_file: "./exp/siglip2_peft/ucf101/no_lora/session.log"
+    
+    unfreeze_backbone: false
     prompt_type: "cocoop"
     manual_prompt_template: "A video of a person performing {}"
     cocoop_hidden_dim: 512
-    # LoRA Configuration
-    lora_r: 4
-    lora_alpha: 8.0
+    
+    lora_r: 0
+    lora_alpha: 0.0
+    lora_dropout: 0.0
+    lora_target_modules: []
+
+    # --- Tuning Parameters ---
+    batch_size: 32              # [TUNING] 32, 64 (Chọn mức tối đa GPU chịu được)
+    accumulation_steps: 1       # Giữ nguyên 1 nếu batch_size = 32 chạy ổn
+    lr_base: 0.0                # Không dùng đến vì base đã đóng băng
+    lr_head: 1.0e-3             # [TUNING] 5e-4, 1e-3, 3e-3
+    weight_decay: 0.01          # [TUNING] 0.01, 0.05
+    num_epochs: 30
+    early_stopping_patience: 5
+
+  # ---------------------------------------------------------
+  # MODE 2: WITH LORA (Frozen Base + LoRA + Train Custom Heads)
+  # ---------------------------------------------------------
+  tuning_with_lora:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/with_lora"
+    log_file: "./exp/siglip2_peft/ucf101/with_lora/session.log"
+    
+    unfreeze_backbone: false
+    prompt_type: "cocoop"
+    manual_prompt_template: "A video of a person performing {}"
+    cocoop_hidden_dim: 512
+    
+    # LoRA Default (Ablation cấu trúc LoRA sẽ làm sau khi Tuning LR xong)
+    lora_r: 8                   
+    lora_alpha: 16.0            
     lora_dropout: 0.05
     lora_target_modules: ["q_proj", "v_proj"]
 
-  # 3. High-Rank LoRA Ablation (All Projections)
-  ablation_lora_r16_all:
-    checkpoint_dir: "./exp/siglip2_peft/ucf101/lora_r16_all"
-    log_file: "./exp/siglip2_peft/ucf101/lora_r16_all/session.log"
-    batch_size: 32
-    num_epochs: 1
-    lr: 5.e-5
-    weight_decay: 0.01
-    # Prompt Configuration
-    prompt_type: "manual"
-    manual_prompt_template: "A video of a person performing {}"
-    cocoop_hidden_dim: 512
-    # LoRA Configuration
-    lora_r: 16
-    lora_alpha: 32.0
-    lora_dropout: 0.1
-    lora_target_modules: ["q_proj", "k_proj", "v_proj", "out_proj"]
-
-  hypertuning_batch_size16:
-    checkpoint_dir: "./exp/siglip2_peft/ucf101/hypertuning_batch_size16"
-    log_file: "./exp/siglip2_peft/ucf101/lora_r16_all/session.log"
-    batch_size: 16
+    # --- Tuning Parameters ---
+    batch_size: 32              # [TUNING] 16, 32 (Mục tiêu: Effective Batch = 32)
+    accumulation_steps: 1       # [TUNING] 2, 1 (Nếu batch_size=16 thì set cái này = 2)
+    lr_base: 3.0e-4             # [TUNING] 1e-4, 3e-4, 5e-4 (Cho LoRA params)
+    lr_head: 1.5e-3             # [TUNING] 5e-4, 1e-3, 2e-3 (Cho Temporal/MetaNet)
+    weight_decay: 0.01          # [TUNING] 0.01, 0.05
     num_epochs: 30
-    lr: 1.e-5
-    weight_decay: 0.01
-    # Prompt Configuration
-    prompt_type: "manual"
+    early_stopping_patience: 5
+
+  # ---------------------------------------------------------
+  # MODE 3: FULL FINE-TUNING (Unfrozen Base + Train Custom Heads)
+  # ---------------------------------------------------------
+  tuning_fft:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/fft"
+    log_file: "./exp/siglip2_peft/ucf101/fft/session.log"
+    
+    unfreeze_backbone: true     # QUAN TRỌNG: Mở khóa SigLIP
+    prompt_type: "cocoop"
     manual_prompt_template: "A video of a person performing {}"
     cocoop_hidden_dim: 512
-    # LoRA Configuration
-    lora_r: 64
-    lora_alpha: 32.0
-    lora_dropout: 0.1
-    lora_target_modules: ["q_proj", "k_proj", "v_proj", "out_proj"]
+    
+    lora_r: 0
+    lora_alpha: 0.0
+    lora_dropout: 0.0
+    lora_target_modules: []
+
+    # --- Tuning Parameters ---
+    batch_size: 8               # [TUNING] 4, 8, 16 (Dễ bị Out of Memory nhất)
+    accumulation_steps: 4       # [TUNING] 8, 4, 2 (Chỉnh sao cho: batch_size * accumulation_steps = 32)
+    lr_base: 2.0e-5             # [TUNING] 1e-6, 1e-5, 2e-5, 5e-5 (Base nhạy cảm, cần LR siêu nhỏ)
+    lr_head: 3.0e-4             # [TUNING] 1e-4, 3e-4, 5e-4
+    weight_decay: 0.01          # [TUNING] 0.01, 0.05
+    num_epochs: 30
+    early_stopping_patience: 5
