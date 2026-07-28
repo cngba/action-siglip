@@ -224,36 +224,45 @@ class Siglip2ActionModel(nn.Module):
             prompt_mask = torch.ones((B * K, M), dtype=base_mask.dtype, device=device)
             full_mask = torch.cat([prompt_mask, base_mask], dim=1)
             
-            text_outputs = self.model.text_model(inputs_embeds=dynamic_prompts, attention_mask=full_mask)
+            # text_outputs = self.model.text_model(inputs_embeds=dynamic_prompts, attention_mask=full_mask)
             
-            # Extract robust pooled representation
-            if hasattr(text_outputs, "pooler_output") and text_outputs.pooler_output is not None:
-                pooled_text = text_outputs.pooler_output
-            else:
-                seq_lengths = full_mask.sum(dim=-1).to(torch.long) - 1
-                batch_indices = torch.arange(text_outputs.last_hidden_state.shape[0], device=device)
-                pooled_text = text_outputs.last_hidden_state[batch_indices, seq_lengths, :]
+            # # Extract robust pooled representation
+            # if hasattr(text_outputs, "pooler_output") and text_outputs.pooler_output is not None:
+            #     pooled_text = text_outputs.pooler_output
+            # else:
+            #     seq_lengths = full_mask.sum(dim=-1).to(torch.long) - 1
+            #     batch_indices = torch.arange(text_outputs.last_hidden_state.shape[0], device=device)
+            #     pooled_text = text_outputs.last_hidden_state[batch_indices, seq_lengths, :]
 
-            ## --- CUSTOM FORWARD PASS ĐỂ LÁCH LUẬT CỦA HUGGING FACE ---
+            # --- CUSTOM FORWARD PASS VỚI CHUNKING ĐỂ CHỐNG OOM ---
+        
+            # 1. Biến đổi attention mask từ 2D sang 4D
+            extended_attention_mask = full_mask[:, None, None, :].to(dtype=dynamic_prompts.dtype)
+            extended_attention_mask = (1.0 - extended_attention_mask) * torch.finfo(dynamic_prompts.dtype).min
             
-            # # 1. Biến đổi attention mask từ 2D sang 4D để Encoder có thể hiểu
-            # extended_attention_mask = full_mask[:, None, None, :].to(dtype=dynamic_prompts.dtype)
-            # extended_attention_mask = (1.0 - extended_attention_mask) * torch.finfo(dynamic_prompts.dtype).min
+            # 2. Chia nhỏ batch khổng lồ (B*K) thành các khối nhỏ để chạy
+            chunk_size = 128  # Nếu vẫn bị OOM, hãy hạ số này xuống 64 hoặc 32
+            all_pooled_text = []
             
-            # # 2. Bypass text_model, đẩy thẳng embedding vào lõi Encoder
-            # encoder_outputs = self.model.text_model.encoder(
-            #     inputs_embeds=dynamic_prompts,
-            #     attention_mask=extended_attention_mask
-            # )
-            # last_hidden_state = encoder_outputs[0]
-            
-            # # 3. Chạy qua lớp LayerNorm cuối cùng (bắt buộc của SigLIP)
-            # last_hidden_state = self.model.text_model.final_layer_norm(last_hidden_state)
-            
-            # # 4. Trích xuất text feature (lấy token cuối cùng dựa trên mask)
-            # seq_lengths = full_mask.sum(dim=-1).to(torch.long) - 1
-            # batch_indices = torch.arange(last_hidden_state.shape[0], device=device)
-            # pooled_text = last_hidden_state[batch_indices, seq_lengths, :]
+            for i in range(0, dynamic_prompts.size(0), chunk_size):
+                chunk_prompts = dynamic_prompts[i : i + chunk_size]
+                chunk_mask = extended_attention_mask[i : i + chunk_size]
+                
+                chunk_outputs = self.model.text_model.encoder(
+                    inputs_embeds=chunk_prompts,
+                    attention_mask=chunk_mask
+                )
+                chunk_last_hidden_state = self.model.text_model.final_layer_norm(chunk_outputs[0])
+                
+                # Trích xuất text feature cho chunk
+                chunk_seq_lengths = full_mask[i : i + chunk_size].sum(dim=-1).to(torch.long) - 1
+                chunk_batch_indices = torch.arange(chunk_last_hidden_state.shape[0], device=device)
+                chunk_pooled = chunk_last_hidden_state[chunk_batch_indices, chunk_seq_lengths, :]
+                
+                all_pooled_text.append(chunk_pooled)
+                
+            # 3. Gộp các khối lại thành tensor hoàn chỉnh
+            pooled_text = torch.cat(all_pooled_text, dim=0)
                 
             # Crucial: Apply SigLIP's text projection to align with the visual space
             if hasattr(self.model, "text_projection"):
