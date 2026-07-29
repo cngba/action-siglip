@@ -67,17 +67,25 @@ def setup_logger(log_file):
 
 class EarlyStopping:
     """Dừng huấn luyện sớm nếu điểm validation không cải thiện sau số epoch chỉ định."""
-    def __init__(self, patience=5, min_delta=0.0):
+    def __init__(self, patience=5, min_delta=0.0, mode='max'):
         self.patience = patience
         self.min_delta = min_delta
         self.counter = 0
         self.best_score = None
         self.early_stop = False
+        self.mode = mode
 
     def __call__(self, score, logger):
         if self.best_score is None:
             self.best_score = score
-        elif score < self.best_score + self.min_delta:
+        # Nếu đang đo Loss (min), score không được lớn hơn best_score - min_delta
+        elif self.mode == 'min' and score > self.best_score - self.min_delta:
+            self.counter += 1
+            logger.info(f"EarlyStopping counter: {self.counter} out of {self.patience}")
+            if self.counter >= self.patience:
+                self.early_stop = True
+        # Nếu đang đo Acc (max), score không được nhỏ hơn best_score + min_delta
+        elif self.mode == 'max' and score < self.best_score + self.min_delta:
             self.counter += 1
             logger.info(f"EarlyStopping counter: {self.counter} out of {self.patience}")
             if self.counter >= self.patience:
@@ -356,11 +364,11 @@ def main():
 
     os.makedirs(config["checkpoint_dir"], exist_ok=True)
     start_epoch = 1
-    best_val_acc = 0.0
+    best_val_loss = float('inf')
 
     # KHỞI TẠO EARLY STOPPING TẠI ĐÂY
     patience = config.get("early_stopping_patience", 5)
-    early_stopping = EarlyStopping(patience=patience, min_delta=0.1) 
+    early_stopping = EarlyStopping(patience=patience, min_delta=0.0, mode='min') 
     logger.info(f"Early Stopping enabled with patience: {patience}")
 
     if config.get("resume") and os.path.isfile(config["resume"]):
@@ -388,12 +396,13 @@ def main():
         )
         
         metrics = test.validate(epoch, val_loader, model, device)
+        val_loss = metrics.get('val_loss', 0.0)
 
         epoch_time = time.time() - start_time # Kết thúc bấm giờ (giây)
 
         logger.info(f"Epoch Time: {epoch_time:.2f}s | Peak VRAM: {peak_vram:.2f} GB")
         logger.info(f"Epoch Summary -> Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%")
-        logger.info(f"Val Summary   -> Top-1: {metrics['top1']:.2f}% | Top-5: {metrics['top5']:.2f}% | F1: {metrics['f1']:.2f}%")
+        logger.info(f"Val Summary   -> Val Loss: {val_loss:.4f} | Top-1: {metrics['top1']:.2f}% | Top-5: {metrics['top5']:.2f}%")
 
         current_lr = optimizer.param_groups[0]['lr']
         if wandb is not None:
@@ -402,6 +411,7 @@ def main():
                 "lr": current_lr,
                 "train_loss": train_loss,
                 "train_acc": train_acc,
+                "val_loss": val_loss,
                 "val_top1": metrics["top1"],
                 "val_top5": metrics["top5"],
                 "val_f1": metrics["f1"],
@@ -428,21 +438,24 @@ def main():
         }, os.path.join(run_dir, "last_checkpoint.pt"))
 
         # 3. Preserve full state for best validation model
-        if metrics['top1'] > best_val_acc:
-            best_val_acc = metrics['top1']
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
             torch.save({
                 'epoch': epoch,
-                'model_state_dict': model.state_dict(),
+                'model_state_dict': state_dict_to_save,
                 'optimizer_state_dict': optimizer.state_dict(),
                 'scheduler_state_dict': scheduler.state_dict(),
-                'val_acc': best_val_acc
+                'val_loss': best_val_loss,
+                'val_acc': metrics['top1']
             }, os.path.join(run_dir, "best_model.pt"))
-            logger.info(f"New best model saved into check-points with validation score: {best_val_acc:.2f}%")
+            logger.info(f"New best model saved into check-points with Validation Loss: {best_val_loss:.4f}")
+        # -----------------------------------------
 
-        early_stopping(metrics['top1'], logger)
+        # Truyền val_loss vào Early Stopping
+        early_stopping(val_loss, logger)
         if early_stopping.early_stop:
             logger.info(f"Early stopping triggered! Đã {early_stopping.patience} epochs không có sự cải thiện nào.")
-            break # Thoát khỏi vòng lặp huấn luyện
+            break
 
     if wandb is not None:
         wandb.finish()

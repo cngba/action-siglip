@@ -66,6 +66,9 @@ def validate(epoch, dataloader, model, device, unseen_class_names=None, is_zero_
     all_labels = []
     all_preds = []
     all_logits = []
+
+    total_val_loss = 0.0
+    criterion = nn.CrossEntropyLoss()
     
     start_time = time.time()
     total_videos = 0
@@ -92,6 +95,9 @@ def validate(epoch, dataloader, model, device, unseen_class_names=None, is_zero_
         # Modern PyTorch Autocast API
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16 if device.type == "cuda" else torch.float32):
             logits = model(pixel_values, unseen_class_names=unseen_class_names, is_zero_shot=is_zero_shot)
+
+            loss = criterion(logits, labels)
+            total_val_loss += loss.item() * labels.size(0)
         
         _, predicted = torch.max(logits, 1)
         all_preds.extend(predicted.cpu().numpy())
@@ -104,6 +110,8 @@ def validate(epoch, dataloader, model, device, unseen_class_names=None, is_zero_
     all_logits = torch.cat(all_logits, dim=0)
     all_labels = np.array(all_labels)
     all_preds = np.array(all_preds)
+
+    avg_val_loss = total_val_loss / max(1, total_videos)
     
     # 1. Top-1 Target Calculation
     top1_acc = accuracy_score(all_labels, all_preds) * 100
@@ -155,7 +163,8 @@ def validate(epoch, dataloader, model, device, unseen_class_names=None, is_zero_
     return {
         "top1": top1_acc,
         "top5": top5_acc,
-        "f1": f1_pct
+        "f1": f1_pct,
+        "val_loss": avg_val_loss
     }
 
 

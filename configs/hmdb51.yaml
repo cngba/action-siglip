@@ -1,0 +1,13 @@
+# configs/hmdb51.yaml
+model_name: "google/siglip2-base-patch16-224"
+seed: 1024
+
+data:
+  dataset: "hmdb51"
+  num_classes: 51             # HMDB51 chỉ có 51 classes
+  num_segments: 8
+  base_dir: "/root/data/HMDB51/videos"         # Thay bằng đường dẫn thực tế của bạn
+  annotation_dir: "/root/data/HMDB51/splits"   # Thư mục chứa các file txt split (vd: brush_hair_test_split1.txt)
+  split: 1
+  workers: 8
+

@@ -14,15 +14,15 @@ data:
   workers: 8
 
 # ==============================================================================
-# Mode Matrices for Hyperparameter Tuning & Baselines
+# Mode Matrices for Final Baseline Showdown
 # ==============================================================================
 modes:
   # ---------------------------------------------------------
   # MODE 1: NO LORA (Frozen Base + Train Custom Heads)
   # ---------------------------------------------------------
-  tuning_no_lora:
-    checkpoint_dir: "./exp/siglip2_peft/ucf101/no_lora"
-    log_file: "./exp/siglip2_peft/ucf101/no_lora/session.log"
+  final_no_lora:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/final_no_lora"
+    log_file: "./exp/siglip2_peft/ucf101/final_no_lora/session.log"
     
     unfreeze_backbone: false
     prompt_type: "manual"
@@ -34,52 +34,53 @@ modes:
     lora_dropout: 0.0
     lora_target_modules: []
 
-    # --- Tuning Parameters ---
-    batch_size: 16              # [TUNING] 16, 32, 64 (Chọn mức tối đa GPU chịu được)
-    accumulation_steps: 1       # Giữ nguyên 1 nếu batch_size = 32 chạy ổn
-    lr_base: 0.0                # Không dùng đến vì base đã đóng băng
-    lr_head: 1.0e-3             # [TUNING] 5e-4, 1e-3, 3e-3
-    weight_decay: 0.1           # [TUNING] 0.01, 0.05, 0.1
-    num_epochs: 10
-    early_stopping_patience: 5
+    batch_size: 16              
+    accumulation_steps: 1       
+    lr_base: 0.0                
+    lr_head: 1.0e-3             
+    weight_decay: 0.1           
+    
+    # Kéo dài epoch để hội tụ toàn cục
+    num_epochs: 40
+    scheduler_t_max: 40
+    early_stopping_patience: 7
 
   # ---------------------------------------------------------
   # MODE 2: WITH LORA (Frozen Base + LoRA + Train Custom Heads)
   # ---------------------------------------------------------
-  tuning_with_lora_weight_decay_0.1:
-    checkpoint_dir: "./exp/siglip2_peft/ucf101/tuning_with_lora_weight_decay_0.1"
-    log_file: "./exp/siglip2_peft/ucf101/tuning_with_lora_weight_decay_0.1/session.log"
+  final_with_lora:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/final_with_lora"
+    log_file: "./exp/siglip2_peft/ucf101/final_with_lora/session.log"
     
     unfreeze_backbone: false
-    prompt_type: "manual"
+    prompt_type: "cocoop"
     manual_prompt_template: "A video of a person performing {}"
     cocoop_hidden_dim: 512
     
-    # LoRA Default (Ablation cấu trúc LoRA sẽ làm sau khi Tuning LR xong)
-    lora_r: 8                   
-    lora_alpha: 16.0            
-    lora_dropout: 0.05
-    lora_target_modules: ["q_proj", "v_proj"]
+    lora_r: 16         # 8, 16, 32, 64          
+    lora_alpha: 16.0   # 8.0, 16.0, 32.0         
+    lora_dropout: 0.05 # 0.0, 0.05, 0.1
+    lora_target_modules: ["q_proj","v_proj"] # 1. ["q_proj", "v_proj"]
+                                              # 2. ["q_proj", "k_proj", "v_proj", "out_proj"]
 
-    # --- Tuning Parameters ---
-    batch_size: 32              # [TUNING] 16, 32, 64 (Mục tiêu: Effective Batch = 32)
-    accumulation_steps: 2       # [TUNING] 2, 1 (Nếu batch_size=16 thì set cái này = 2)
-    lr_base: 3.0e-4             # [TUNING] 1e-4, 3e-4, 5e-4 (Cho LoRA params)
-    lr_head: 2.0e-3             # [TUNING] 5e-4, 1e-3, 2e-3 (Cho Temporal/MetaNet)
-    weight_decay: 0.1          # [TUNING] 0.01, 0.05, 0.1
-    num_epochs: 10
-    early_stopping_patience: 5
+    batch_size: 16              
+    accumulation_steps: 4       
+    lr_base: 3.0e-4             
+    lr_head: 2.0e-3             
+    weight_decay: 0.1          
+    
+    num_epochs: 40
+    scheduler_t_max: 40
+    early_stopping_patience: 7
 
   # ---------------------------------------------------------
   # MODE 3: FULL FINE-TUNING (Unfrozen Base + Train Custom Heads)
   # ---------------------------------------------------------
-  tuning_fft_weight_decay_0.05:
-    checkpoint_dir: "./exp/siglip2_peft/ucf101/tuning_fft_weight_decay_0.05"
-    log_file: "./exp/siglip2_peft/ucf101/tuning_fft_weight_decay_0.05/session.log"
-
-    # resume: "./exp/siglip2_peft/ucf101/tuning_fft_batch_size_16/20260728_180843_tuning_fft_batch_size_16_8f/last_checkpoint.pt"
+  final_fft:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/final_fft"
+    log_file: "./exp/siglip2_peft/ucf101/final_fft/session.log"
     
-    unfreeze_backbone: true     # QUAN TRỌNG: Mở khóa SigLIP
+    unfreeze_backbone: true     
     prompt_type: "manual"
     manual_prompt_template: "A video of a person performing {}"
     cocoop_hidden_dim: 512
@@ -89,11 +90,39 @@ modes:
     lora_dropout: 0.0
     lora_target_modules: []
 
-    # --- Tuning Parameters ---
-    batch_size: 8               # [TUNING] 4, 8, 16 (Dễ bị Out of Memory nhất)
-    accumulation_steps: 4       # [TUNING] 8, 4, 2 (Chỉnh sao cho: batch_size * accumulation_steps = 32)
-    lr_base: 1.0e-6             # [TUNING] 1e-6, 1e-5, 2e-5, 5e-5 (Base nhạy cảm, cần LR siêu nhỏ)
-    lr_head: 3.0e-4             # [TUNING] 1e-4, 3e-4, 5e-4
-    weight_decay: 0.05          # [TUNING] 0.01, 0.05, 0.1
+    batch_size: 8               
+    accumulation_steps: 4       
+    lr_base: 1.0e-6             
+    lr_head: 3.0e-4             
+    weight_decay: 0.1          
+    
+    # FFT học chậm hơn nên cần mốc epoch tối đa và patience dài hơn
+    num_epochs: 50
+    scheduler_t_max: 50
+    early_stopping_patience: 8
+
+    
+  
+  ablation_study_target_modules_4:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/ablation_study_target_modules_4"
+    log_file: "./exp/siglip2_peft/ucf101/ablation_study_target_modules_4/session.log"
+    
+    unfreeze_backbone: false
+    prompt_type: "manual"
+    manual_prompt_template: "A video of a person performing {}"
+    cocoop_hidden_dim: 512
+    
+    lora_r: 16         # 8, 16, 32, 64          
+    lora_alpha: 16.0   # 8.0, 16.0, 32.0         
+    lora_dropout: 0.05 # 0.0, 0.05, 0.1
+    lora_target_modules: ["q_proj","v_proj"] # 1. ["q_proj", "v_proj"]
+                                              # 2. ["q_proj", "k_proj", "v_proj", "out_proj"]
+
+    batch_size: 32              
+    accumulation_steps: 2       
+    lr_base: 3.0e-4             
+    lr_head: 2.0e-3             
+    weight_decay: 0.1          
+    
     num_epochs: 10
     early_stopping_patience: 5
