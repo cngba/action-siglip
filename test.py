@@ -276,9 +276,19 @@ if __name__ == "__main__":
             logging.info(f"Loading fine-tuned checkpoint weights directly from: {checkpoint_target}")
             checkpoint = torch.load(checkpoint_target, map_location=device, weights_only=False)
             
-            # SAFEGUARD: Strip 'module.' prefix if the model was trained with DataParallel
-            state_dict = checkpoint['model_state_dict']
-            clean_state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
+            # Lấy state_dict từ checkpoint an toàn
+            state_dict = checkpoint['model_state_dict'] if 'model_state_dict' in checkpoint else checkpoint
+            
+            # Xử lý prefix 'module.' và ánh xạ lại tên biến 'temporal_module'
+            clean_state_dict = {}
+            for k, v in state_dict.items():
+                name = k.replace('module.', '')
+                
+                # Dịch tên biến cũ sang kiến trúc mới
+                if name.startswith('temporal_') and not name.startswith('temporal_module.'):
+                    name = name.replace('temporal_', 'temporal_module.')
+                    
+                clean_state_dict[name] = v
             
             model.load_state_dict(clean_state_dict)
             current_epoch = checkpoint.get('epoch', 0)
