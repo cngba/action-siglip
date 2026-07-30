@@ -102,6 +102,11 @@ def run_train_epoch(epoch, model, dataloader, criterion, optimizer, scheduler, d
     correct = 0
     total = 0
     
+    # SAFEGUARD: Extract underlying model if wrapped in DataParallel to access class mappings
+    base_model = getattr(model, "module", model)
+    target_classes = base_model.class_names
+    class_to_idx = {name: idx for idx, name in enumerate(target_classes)}
+
     optimizer.zero_grad() # Move zero_grad outside the loop for accumulation
 
     progress_bar = tqdm(dataloader, desc=f"Training - Epoch {epoch}", file=sys.stdout)
@@ -109,6 +114,13 @@ def run_train_epoch(epoch, model, dataloader, criterion, optimizer, scheduler, d
         pixel_values = batch["pixel_values"].to(device)
         labels = batch["label_id"].to(device)
         
+        # FIX: Map string label names to local batch/logits tensor indices safely
+        if "label_name" in batch:
+            raw_labels = batch["label_name"]
+            labels = torch.tensor([class_to_idx[lbl] for lbl in raw_labels], dtype=torch.long, device=device)
+        else:
+            labels = batch["label_id"].to(device)
+            
         # Native bfloat16 on A100 requires no scaler
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
 
@@ -353,7 +365,7 @@ def main():
             continue
         if "lora" in n:
             lora_params.append(p)
-        elif "temporal" in n or "meta_net" in n:
+        elif "temporal" in n or "meta_net" in n or "gamma" in n: # FIX: Added gamma
             custom_head_params.append(p)
         else:
             other_params.append(p)

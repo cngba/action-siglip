@@ -325,8 +325,7 @@ class Siglip2ActionModel(nn.Module):
 
         # --- 3. LOGITS ---
         logit_scale = self.model.logit_scale.exp() 
-        logit_bias = self.model.logit_bias
-        logits = (torch.bmm(v_norm.unsqueeze(1), t_features.transpose(1, 2)).squeeze(1) * logit_scale) + logit_bias
+        logits = (torch.bmm(v_norm.unsqueeze(1), t_features.transpose(1, 2)).squeeze(1) * logit_scale)
         
         # return F.softmax(logits, dim=-1) if is_zero_shot else logits
         return logits
