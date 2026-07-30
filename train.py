@@ -92,8 +92,6 @@ class EarlyStopping:
             self.counter = 0
 
 def run_train_epoch(epoch, model, dataloader, criterion, optimizer, scheduler, device, accumulation_steps=1):
-    """Runs a single training epoch optimization pass with bfloat16 and gradient accumulation."""
-    # Reset bộ đếm VRAM ở đầu mỗi epoch
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats()
 
@@ -102,46 +100,58 @@ def run_train_epoch(epoch, model, dataloader, criterion, optimizer, scheduler, d
     correct = 0
     total = 0
     
-    # SAFEGUARD: Extract underlying model if wrapped in DataParallel to access class mappings
     base_model = getattr(model, "module", model)
     target_classes = base_model.class_names
     class_to_idx = {name: idx for idx, name in enumerate(target_classes)}
 
-    optimizer.zero_grad() # Move zero_grad outside the loop for accumulation
+    optimizer.zero_grad()
 
     progress_bar = tqdm(dataloader, desc=f"Training - Epoch {epoch}", file=sys.stdout)
     for i, batch in enumerate(progress_bar):
         pixel_values = batch["pixel_values"].to(device)
-        labels = batch["label_id"].to(device)
         
-        # FIX: Map string label names to local batch/logits tensor indices safely
         if "label_name" in batch:
             raw_labels = batch["label_name"]
             labels = torch.tensor([class_to_idx[lbl] for lbl in raw_labels], dtype=torch.long, device=device)
         else:
             labels = batch["label_id"].to(device)
             
-        # Native bfloat16 on A100 requires no scaler
+        B = pixel_values.size(0)
+        
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-
-            logits = model(pixel_values)
-            loss = criterion(logits, labels)
+            # 1. Get normalized video representations (B, D)
+            v_norm, t_features, logit_scale, logit_bias = model(pixel_values, return_features=True)
             
-            # Normalize loss for accumulation
+            # For contrastive training on a batch, we extract text features corresponding *only* to the samples in the batch
+            # t_features shape is typically (B, K, D) or we can select the text features matching the batch labels
+            batch_text_feats = t_features[torch.arange(B), labels] # Shape: (B, D)
+            
+            # 2. Compute Cosine Similarities scaled by SigLIP's logit_scale
+            # Symmetric Contrastive Loss (Image-to-Text and Text-to-Image)
+            logits_per_image = logit_scale * torch.matmul(v_norm, batch_text_feats.t()) + logit_bias
+            logits_per_text = logits_per_image.t()
+            
+            # Ground truth targets are matching indices along the batch diagonal (0, 1, 2, ..., B-1)
+            gt_targets = torch.arange(B, device=device)
+            
+            loss_i2t = criterion(logits_per_image, gt_targets)
+            loss_t2i = criterion(logits_per_text, gt_targets)
+            loss = (loss_i2t + loss_t2i) / 2.0
+            
             loss = loss / accumulation_steps
 
-        # Standard backward pass (no scaler needed for bf16)
         loss.backward()
 
         if (i + 1) % accumulation_steps == 0 or (i + 1) == len(dataloader):
             optimizer.step()
             optimizer.zero_grad()
 
-        # Track metrics (multiply by accumulation_steps to get true loss value for logging)
         running_loss += (loss.item() * accumulation_steps)
-        _, predicted = torch.max(logits, 1)
+        
+        # Track accuracy using the batch similarity matrix argmax
+        _, predicted = torch.max(logits_per_image, 1)
         total += labels.size(0)
-        correct += (predicted == labels).sum().item()
+        correct += (predicted == gt_targets).sum().item()
 
         progress_bar.set_postfix({
             "Loss": f"{(loss.item() * accumulation_steps):.4f}", 
@@ -151,14 +161,13 @@ def run_train_epoch(epoch, model, dataloader, criterion, optimizer, scheduler, d
     epoch_loss = running_loss / len(dataloader)
     epoch_acc = 100 * correct / total
 
-    # Ở cuối hàm, ngay trước phần return
     peak_vram = 0.0
     if torch.cuda.is_available():
-        peak_vram = torch.cuda.max_memory_allocated() / (1024 ** 3) # Đổi sang GB
+        peak_vram = torch.cuda.max_memory_allocated() / (1024 ** 3)
 
     scheduler.step()
     return epoch_loss, epoch_acc, peak_vram
-
+    
 def main():
     log_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     

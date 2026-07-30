@@ -146,8 +146,8 @@ modes:
     weight_decay: 0.1           
     
     # Kéo dài epoch để hội tụ toàn cục
-    num_epochs: 50
-    scheduler_t_max: 50
+    num_epochs: 5
+    scheduler_t_max: 5
     early_stopping_patience: 5
 
   # ---------------------------------------------------------

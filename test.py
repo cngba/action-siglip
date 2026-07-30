@@ -298,31 +298,31 @@ if __name__ == "__main__":
     if is_zs_mode:
         logging.info("Executing pure Zero-Shot baseline performance evaluation over unseen action domains.")
         unseen_classes = config.get("unseen_class_names", class_list)
-    else:
-        checkpoint_target = args.weights if args.weights else os.path.join(config["checkpoint_dir"], "best_model.pt")
-        if checkpoint_target and os.path.isfile(checkpoint_target):
-            logging.info(f"Loading fine-tuned checkpoint weights directly from: {checkpoint_target}")
-            checkpoint = torch.load(checkpoint_target, map_location=device, weights_only=False)
+    
+    checkpoint_target = args.weights if args.weights else os.path.join(config["checkpoint_dir"], "best_model.pt")
+    if checkpoint_target and os.path.isfile(checkpoint_target):
+        logging.info(f"Loading fine-tuned checkpoint weights directly from: {checkpoint_target}")
+        checkpoint = torch.load(checkpoint_target, map_location=device, weights_only=False)
+        
+        # Lấy state_dict từ checkpoint an toàn
+        state_dict = checkpoint['model_state_dict'] if 'model_state_dict' in checkpoint else checkpoint
+        
+        # Xử lý prefix 'module.' và ánh xạ lại tên biến 'temporal_module'
+        clean_state_dict = {}
+        for k, v in state_dict.items():
+            name = k.replace('module.', '')
             
-            # Lấy state_dict từ checkpoint an toàn
-            state_dict = checkpoint['model_state_dict'] if 'model_state_dict' in checkpoint else checkpoint
-            
-            # Xử lý prefix 'module.' và ánh xạ lại tên biến 'temporal_module'
-            clean_state_dict = {}
-            for k, v in state_dict.items():
-                name = k.replace('module.', '')
+            # Dịch tên biến cũ sang kiến trúc mới
+            if name.startswith('temporal_') and not name.startswith('temporal_module.'):
+                name = name.replace('temporal_', 'temporal_module.')
                 
-                # Dịch tên biến cũ sang kiến trúc mới
-                if name.startswith('temporal_') and not name.startswith('temporal_module.'):
-                    name = name.replace('temporal_', 'temporal_module.')
-                    
-                clean_state_dict[name] = v
-            
-            model.load_state_dict(clean_state_dict)
-            current_epoch = checkpoint.get('epoch', 0)
-        else:
-            logging.warning(f"No checkpoint matched at destination: '{checkpoint_target}'. "
-                            f"Evaluating vanilla pre-trained weights instead.")
+            clean_state_dict[name] = v
+        
+        model.load_state_dict(clean_state_dict, strict=False)
+        current_epoch = checkpoint.get('epoch', 0)
+    else:
+        logging.warning(f"No checkpoint matched at destination: '{checkpoint_target}'. "
+                        f"Evaluating vanilla pre-trained weights instead.")
 
     # Accelerate inference if multiple GPUs are available
     if torch.cuda.device_count() > 1:
