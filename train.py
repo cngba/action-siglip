@@ -1,8 +1,5 @@
-# train.py
+# action-siglip/train.py
 # Author: Cong
-# Streamlined Training Engine with Custom Profiling & Target Metrics Strategy
-# Adapted for Level 5 Dual-Tower LoRA and Hybrid Temporal Modeling
-# Configured for Unified Mode Matrix Parsers (ucf101.yaml)
 
 """
 Main training script for Siglip2 action recognition experiments.
@@ -225,22 +222,33 @@ def main():
             config=config
         )
 
+    dataset_name = config.get("dataset", "ucf101").lower()
+    if dataset_name == "hmdb51":
+        from datasets import HMDB51VideoDataset as ActionDataset
+    else:
+        from datasets import UCF101VideoDataset as ActionDataset
+
+    # Đọc danh sách class SEEN từ config
+    seen_classes = raw_yaml.get("zero_shot_splits", {}).get("seen_class_names", None)
+
     logger.info("Setting up Training Split and Data Loaders pipeline configurations...")
-    train_dataset = UCF101VideoDataset(
+    train_dataset = ActionDataset(
         base_dir=config["base_dir"],
         annotation_dir=config["annotation_dir"],
         processor=processor,
         split=config["split"],
         num_frames=config["num_frames"],
-        mode='train'
+        mode='train',
+        allowed_classes=seen_classes
     )
-    val_dataset = UCF101VideoDataset(
+    val_dataset = ActionDataset(
         base_dir=config["base_dir"],
         annotation_dir=config["annotation_dir"],
         processor=processor,
         split=config["split"],
         num_frames=config["num_frames"],
-        mode='val'
+        mode='val',
+        allowed_classes=seen_classes
     )
 
     g_train = torch.Generator().manual_seed(config["seed"])

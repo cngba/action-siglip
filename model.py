@@ -1,8 +1,10 @@
+# action-siglip/model.py
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers import SiglipModel, AutoProcessor
 from peft import LoraConfig
+import re
 
 
 class LoRALinear(nn.Module):
@@ -125,11 +127,15 @@ class Siglip2ActionModel(nn.Module):
             print(f"Applying LoRA (r={lora_r}, alpha={lora_alpha}) to {lora_targets}...")
             # Truyền thêm tham số target_modules vào hàm
             self._apply_lora_to_encoder(self.model.vision_model.encoder, r=lora_r, alpha=lora_alpha, name="Vision", target_modules=lora_targets)
-            self._apply_lora_to_encoder(self.model.text_model.encoder, r=lora_r, alpha=lora_alpha, name="Text", target_modules=lora_targets)
+            # self._apply_lora_to_encoder(self.model.text_model.encoder, r=lora_r, alpha=lora_alpha, name="Text", target_modules=lora_targets)
         else:
             print("LoRA is disabled (r=0 or empty targets). Base model is fully frozen.")
 
         self.temporal_module = HybridTemporalModule(dim=embedding_dim)
+        
+        # --- FIX 2: THÊM LEARNABLE GATE GAMMA ĐỂ BẢO TỒN KHÔNG GIAN ZSL ---
+        # Khởi tạo gamma = 0 để ban đầu mô hình dùng 100% feature chuẩn của SigLIP 2
+        self.gamma = nn.Parameter(torch.zeros(1))
         
         if self.prompt_type == "cocoop":
             self.meta_net = MetaNet(dim=embedding_dim, hidden_dim=cocoop_hidden_dim, num_prompt_tokens=4)
@@ -186,16 +192,33 @@ class Siglip2ActionModel(nn.Module):
         
         # Reshape the fully processed spatial features back to temporal sequences
         spatial_features = image_embeds.view(B, T, -1) # type: ignore
+
+        # 1. Bắt buộc L2 Normalize TỪNG FRAME trước để tránh các frame nhiễu (magnitude lớn) nuốt chửng vector
+        spatial_features_norm = F.normalize(spatial_features, p=2, dim=-1)
+
         
         # Temporal Aggregation
-        v = self.temporal_module(spatial_features) # (B, D)
+        # 1. Base Feature từ Spatial Mean Pooling (Giữ nguyên khả năng ZSL nguyên bản)
+        base_v = spatial_features_norm.mean(dim=1)
+        
+        # 2. Dynamic Feature từ Temporal Module
+        temporal_v = self.temporal_module(spatial_features) 
+        
+        # 3. Blending bằng Learnable Gate (gamma bắt đầu = 0)
+        v = base_v + self.gamma * temporal_v
         v_norm = F.normalize(v, p=2, dim=-1)
         
         # --- 2. TEXT ENCODER & PROMPTS ---
-        target_classes = unseen_class_names if is_zero_shot and unseen_class_names is not None else self.class_names
+        # FIX: Lấy đúng danh sách target classes được truyền từ test.py
+        target_classes = unseen_class_names if (is_zero_shot and unseen_class_names is not None) else self.class_names
         K = len(target_classes)
-        text_prompts = [self.manual_prompt_template.format(c) for c in target_classes]
-        inputs = self.processor(text=text_prompts, return_tensors="pt", padding=True, truncation=True).to(device)
+
+        # FIX: Tách CamelCase và chuẩn hóa chữ thường (VD: ApplyEyeMakeup -> apply eye makeup)
+        clean_classes = [re.sub(r'([a-z])([A-Z])', r'\1 \2', c).lower() for c in target_classes]
+        text_prompts = [self.manual_prompt_template.format(c) for c in clean_classes]
+
+        # Ép buộc max_length=64 để Positional Embedding của SigLIP không bị lệch pha do padding động
+        inputs = self.processor(text=text_prompts, return_tensors="pt", padding=True, max_length=64, truncation=True).to(device)
         input_ids = inputs["input_ids"]
 
         # Safely extract attention_mask or create it manually if missing
@@ -305,4 +328,5 @@ class Siglip2ActionModel(nn.Module):
         logit_bias = self.model.logit_bias
         logits = (torch.bmm(v_norm.unsqueeze(1), t_features.transpose(1, 2)).squeeze(1) * logit_scale) + logit_bias
         
-        return F.softmax(logits, dim=-1) if is_zero_shot else logits
+        # return F.softmax(logits, dim=-1) if is_zero_shot else logits
+        return logits

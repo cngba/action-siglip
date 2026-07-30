@@ -13,6 +13,111 @@ data:
   split: 1                                  
   workers: 8
 
+  zero_shot_splits:
+    seen_class_names:
+      - ApplyEyeMakeup
+      - ApplyLipstick
+      - Archery
+      - BabyCrawling
+      - BalanceWeave
+      - BandMarching
+      - BaseballPitch
+      - Basketball
+      - BasketballDunk
+      - BenchPress
+      - Biking
+      - Billiards
+      - BlowDryHair
+      - BlowingCandles
+      - BodyWeightSquats
+      - Bowling
+      - BoxingPunchingBag
+      - BoxingSpeedBag
+      - BreastStroke
+      - BrushingTeeth
+      - CleanAndJerk
+      - CliffDiving
+      - CricketBowling
+      - CricketShot
+      - CuttingInKitchen
+      - Diving
+      - Drumming
+      - Fencing
+      - FieldHockeyPenalty
+      - FloorGymnastics
+      - FrisbeeCatch
+      - FrontCrawl
+      - GolfSwing
+      - Haircut
+      - Hammering
+      - HammerThrow
+      - HandstandPushups
+      - HandstandWalking
+      - HeadMassage
+      - HighJump
+      - HorseRace
+      - HorseRiding
+      - HulaHoop
+      - IceDancing
+      - JavelinThrow
+      - JugglingBalls
+      - JumpRope
+      - JumpingJack
+      - Kayaking
+      - Knitting
+    unseen_class_names:
+      - LongJump
+      - Lunge
+      - MilitaryParade
+      - Mixing
+      - MoppingFloor
+      - Nunchucks
+      - ParallelBars
+      - PizzaTossing
+      - PlayingCello
+      - PlayingDaf
+      - PlayingDhol
+      - PlayingFlute
+      - PlayingGuitar
+      - PlayingPiano
+      - PlayingSitar
+      - PlayingTabla
+      - PlayingViolin
+      - PoleVault
+      - PommelHorse
+      - PullUps
+      - Punch
+      - PushUps
+      - Rafting
+      - RockClimbingIndoor
+      - RopeClimbing
+      - Rowing
+      - SalsaSpin
+      - ShavingBeard
+      - Shotput
+      - SkateBoarding
+      - Skiing
+      - Skijet
+      - SkyDiving
+      - SoccerJuggling
+      - SoccerPenalty
+      - StillRings
+      - SumoWrestling
+      - Surfing
+      - Swing
+      - TableTennisShot
+      - TaiChi
+      - TennisSwing
+      - ThrowDiscus
+      - TrampolineJumping
+      - Typing
+      - UnevenBars
+      - VolleyballSpiking
+      - WalkingWithDog
+      - WallPushups
+      - WritingOnBoard
+      - YoYo
+
 # ==============================================================================
 # Mode Matrices for Final Baseline Showdown
 # ==============================================================================
@@ -20,13 +125,13 @@ modes:
   # ---------------------------------------------------------
   # MODE 1: NO LORA (Frozen Base + Train Custom Heads)
   # ---------------------------------------------------------
-  final_no_lora:
-    checkpoint_dir: "./exp/siglip2_peft/ucf101/final_no_lora"
-    log_file: "./exp/siglip2_peft/ucf101/final_no_lora/session.log"
+  final_no_lora_zsl:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/final_no_lora_zsl"
+    log_file: "./exp/siglip2_peft/ucf101/final_no_lora_zsl/session.log"
     
     unfreeze_backbone: false
     prompt_type: "manual"
-    manual_prompt_template: "A video of a person performing {}"
+    manual_prompt_template: "{}"
     cocoop_hidden_dim: 512
     
     lora_r: 0
@@ -43,18 +148,18 @@ modes:
     # Kéo dài epoch để hội tụ toàn cục
     num_epochs: 50
     scheduler_t_max: 50
-    early_stopping_patience: 8
+    early_stopping_patience: 5
 
   # ---------------------------------------------------------
   # MODE 2: WITH LORA (Frozen Base + LoRA + Train Custom Heads)
   # ---------------------------------------------------------
   final_with_lora:
-    checkpoint_dir: "./exp/siglip2_peft/ucf101/final_with_lora"
-    log_file: "./exp/siglip2_peft/ucf101/final_with_lora/session.log"
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/final_with_lora_zsl"
+    log_file: "./exp/siglip2_peft/ucf101/final_with_lora_zsl/session.log"
     
     unfreeze_backbone: false
     prompt_type: "manual"
-    manual_prompt_template: "A video of a person performing {}"
+    manual_prompt_template: "{}"
     cocoop_hidden_dim: 512
     
     lora_r: 16         # 8, 16, 32, 64          
@@ -66,19 +171,19 @@ modes:
     batch_size: 32              
     accumulation_steps: 1       
     lr_base: 3.0e-4             
-    lr_head: 2.0e-3             
+    lr_head: 1.0e-3             
     weight_decay: 0.1          
     
-    num_epochs: 50
-    scheduler_t_max: 50
-    early_stopping_patience: 8
+    num_epochs: 10
+    scheduler_t_max: 10
+    early_stopping_patience: 5
 
   # ---------------------------------------------------------
   # MODE 3: FULL FINE-TUNING (Unfrozen Base + Train Custom Heads)
   # ---------------------------------------------------------
-  final_fft:
-    checkpoint_dir: "./exp/siglip2_peft/ucf101/final_fft"
-    log_file: "./exp/siglip2_peft/ucf101/final_fft/session.log"
+  final_fft_zsl:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/final_fft_zsl"
+    log_file: "./exp/siglip2_peft/ucf101/final_fft_zsl/session.log"
     
     unfreeze_backbone: true     
     prompt_type: "manual"
@@ -99,30 +204,17 @@ modes:
     # FFT học chậm hơn nên cần mốc epoch tối đa và patience dài hơn
     num_epochs: 50
     scheduler_t_max: 50
-    early_stopping_patience: 8
+    early_stopping_patience: 5
 
-    
-  
-  ablation_study_target_modules_4:
-    checkpoint_dir: "./exp/siglip2_peft/ucf101/ablation_study_target_modules_4"
-    log_file: "./exp/siglip2_peft/ucf101/ablation_study_target_modules_4/session.log"
-    
+  zero_shot:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/final_with_lora_zsl"
+    log_file: "./exp/siglip2_peft/ucf101/zero_shot_eval.log"
     unfreeze_backbone: false
     prompt_type: "manual"
-    manual_prompt_template: "A video of a person performing {}"
+    manual_prompt_template: "{}"
     cocoop_hidden_dim: 512
-    
-    lora_r: 16         # 8, 16, 32, 64          
-    lora_alpha: 16.0   # 8.0, 16.0, 32.0         
-    lora_dropout: 0.05 # 0.0, 0.05, 0.1
-    lora_target_modules: ["q_proj","v_proj"] # 1. ["q_proj", "v_proj"]
-                                              # 2. ["q_proj", "k_proj", "v_proj", "out_proj"]
-
-    batch_size: 32              
-    accumulation_steps: 2       
-    lr_base: 3.0e-4             
-    lr_head: 2.0e-3             
-    weight_decay: 0.1          
-    
-    num_epochs: 10
-    early_stopping_patience: 5
+    lora_r: 16
+    lora_alpha: 16.0
+    lora_dropout: 0.05
+    lora_target_modules: ["q_proj","v_proj"]
+    batch_size: 16

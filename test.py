@@ -1,8 +1,5 @@
-# test.py
+# action-siglip/test.py
 # Author: Cong
-# Decoupled Inference Validation Script - Tracking Explicit Multi-Class Configurations
-# Optimized for SigLIP 2 PEFT and Hybrid Temporal Module Performance
-# Configured for Unified Mode Matrix Parsers (ucf101.yaml)
 
 import os
 import sys
@@ -75,18 +72,22 @@ def validate(epoch, dataloader, model, device, unseen_class_names=None, is_zero_
 
     # SAFEGUARD: Extract underlying model if wrapped in DataParallel
     base_model = getattr(model, "module", model)
-    target_classes = unseen_class_names if is_zero_shot and unseen_class_names is not None else base_model.class_names
-    class_to_idx = {name: idx for idx, name in enumerate(target_classes)}
 
+    # 1. Xác định chính xác danh sách class đang đánh giá
+    target_classes = unseen_class_names if (is_zero_shot and unseen_class_names is not None) else base_model.class_names
+    
+    # 2. Bắt buộc map tên lớp nguyên bản (VD: 'ApplyEyeMakeup') sang index [0 ... K-1] của Logits Matrix
+    class_to_idx = {name: idx for idx, name in enumerate(target_classes)}
     # Target class selection based on scenario
     desc_msg = f"Zero-Shot Evaluation" if is_zero_shot else f"Validation (Epoch {epoch})"
     
     for batch in tqdm(dataloader, desc=desc_msg, file=sys.stdout):
         pixel_values = batch["pixel_values"].to(device)
         
-        if is_zero_shot and "label_name" in batch:
+        # FIX CỐT LÕI: Chắc chắn rằng label index thu được trùng khớp 100% với vị trí cột Logits
+        if "label_name" in batch:
             raw_labels = batch["label_name"]
-            labels = torch.tensor([class_to_idx[lbl] for lbl in raw_labels], dtype=torch.long).to(device)
+            labels = torch.tensor([class_to_idx[lbl] for lbl in raw_labels], dtype=torch.long, device=device)
         else:
             labels = batch["label_id"].to(device)
             
@@ -94,7 +95,8 @@ def validate(epoch, dataloader, model, device, unseen_class_names=None, is_zero_
         
         # Modern PyTorch Autocast API
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16 if device.type == "cuda" else torch.float32):
-            logits = model(pixel_values, unseen_class_names=unseen_class_names, is_zero_shot=is_zero_shot)
+            # FIX: Truyền target_classes vào unseen_class_names để Model và Validation dùng chung 1 List
+            logits = model(pixel_values, unseen_class_names=target_classes, is_zero_shot=is_zero_shot)
 
             loss = criterion(logits, labels)
             total_val_loss += loss.item() * labels.size(0)
@@ -213,17 +215,34 @@ if __name__ == "__main__":
     processor = AutoProcessor.from_pretrained(config["model_name"])
     
     logging.info("Constructing video datasets validation loader configurations...")
+
+    # 1. Định tuyến Dataset linh hoạt từ file cấu hình YAML
+    dataset_name = config.get("dataset", "ucf101").lower()
+    if dataset_name == "hmdb51":
+        from datasets.hmdb51 import HMDB51VideoDataset as ActionDataset
+        logging.info("=> Routing to HMDB51 Data Pipeline")
+    else:
+        from datasets.ucf101 import UCF101VideoDataset as ActionDataset
+        logging.info("=> Routing to UCF101 Data Pipeline")
     
-    is_zs_mode = (args.mode == "zero_shot")
+    # 2. Nhận diện các mode Zero-Shot (zero_shot, zero_shot_hmdb, zero_shot_fft, v.v.)
+    is_zs_mode = ("zero_shot" in args.mode)
+
+    # 3. Nạp danh sách class tương ứng
+    if is_zs_mode:
+        target_classes = raw_yaml.get("zero_shot_splits", {}).get("unseen_class_names", None)
+    else:
+        target_classes = raw_yaml.get("zero_shot_splits", {}).get("seen_class_names", None)
     
-    val_dataset = UCF101VideoDataset(
+    val_dataset = ActionDataset(
         base_dir=config["base_dir"], 
         annotation_dir=config["annotation_dir"], 
         processor=processor, 
         split=config["split"],
         num_frames=config["num_frames"], 
         mode='test',
-        prompt_template=config.get("manual_prompt_template", "A video of a person performing {}")
+        prompt_template=config.get("manual_prompt_template", "A video of a person performing {}"),
+        allowed_classes=target_classes
     )
     
     g_val = torch.Generator()

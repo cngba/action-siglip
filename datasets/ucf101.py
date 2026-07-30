@@ -25,9 +25,11 @@ class UCF101VideoDataset(Dataset):
         split: int = 1,  
         mode: str = 'train',
         num_frames: int = 8,
-        prompt_template: str = "A video of a person performing {}" # Thêm tham số này
+        prompt_template: str = "A video of a person performing {}", # Thêm tham số này
+        allowed_classes=None  # BỔ SUNG THAM SỐ NÀY
     ):
         self.prompt_template = prompt_template # Lưu lại template
+        self.allowed_classes = allowed_classes
         self.base_dir = base_dir
         self.annotation_dir = annotation_dir
         self.processor = processor
@@ -38,6 +40,8 @@ class UCF101VideoDataset(Dataset):
         # Step 1: Build the class-name to label-id mapping used by the dataset.
         self.label_to_id, self.id_to_label = self._build_class_mappings()
         self.unique_labels = sorted(list(self.label_to_id.keys()))
+        if self.allowed_classes is not None and len(self.allowed_classes) > 0:
+            self.unique_labels = sorted([c for c in self.unique_labels if c in self.allowed_classes])
 
         # Step 2: Load all video paths for the requested split and mode.
         self.video_list = self._load_split()
@@ -81,6 +85,7 @@ class UCF101VideoDataset(Dataset):
                     
         return label_to_id, id_to_label
 
+
     def _load_split(self):
         video_list = []
         # Chống Leakage: Test dùng testlist, Train và Val dùng chung trainlist
@@ -100,6 +105,10 @@ class UCF101VideoDataset(Dataset):
                 class_name = vid_path.split('/')[0]
                 
                 if class_name in self.label_to_id:
+                    if self.allowed_classes is not None and len(self.allowed_classes) > 0:
+                        if class_name not in self.allowed_classes:
+                            continue
+
                     label_id = self.label_to_id[class_name]
                     video_list.append((vid_path, label_id))
 
@@ -190,7 +199,8 @@ class UCF101VideoDataset(Dataset):
         item = {
             "pixel_values": pixel_values, # Output is directly a (8, 3, 224, 224) float32 Tensor
             "input_ids": input_ids,
-            "label_id": torch.tensor(label_id, dtype=torch.long)
+            "label_id": torch.tensor(label_id, dtype=torch.long),
+            "label_name": label_str
         }
         if attention_mask is not None:
             item["attention_mask"] = attention_mask
