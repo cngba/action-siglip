@@ -70,13 +70,11 @@ def validate(epoch, dataloader, model, device, unseen_class_names=None, is_zero_
     start_time = time.time()
     total_videos = 0
 
-    # SAFEGUARD: Extract underlying model if wrapped in DataParallel
     base_model = getattr(model, "module", model)
 
-    # 1. Xác định chính xác danh sách class đang đánh giá
     target_classes = unseen_class_names if (is_zero_shot and unseen_class_names is not None) else base_model.class_names
     
-    # 2. Bắt buộc map tên lớp nguyên bản (VD: 'ApplyEyeMakeup') sang index [0 ... K-1] của Logits Matrix
+    # Bắt buộc map tên lớp nguyên bản (VD: 'ApplyEyeMakeup') sang index [0 ... K-1] của Logits Matrix
     class_to_idx = {name: idx for idx, name in enumerate(target_classes)}
     # Target class selection based on scenario
     desc_msg = f"Zero-Shot Evaluation" if is_zero_shot else f"Validation (Epoch {epoch})"
@@ -84,7 +82,7 @@ def validate(epoch, dataloader, model, device, unseen_class_names=None, is_zero_
     for batch in tqdm(dataloader, desc=desc_msg, file=sys.stdout):
         pixel_values = batch["pixel_values"].to(device)
         
-        # FIX CỐT LÕI: Chắc chắn rằng label index thu được trùng khớp 100% với vị trí cột Logits
+        # label index thu được trùng khớp 100% với vị trí cột Logits
         if "label_name" in batch:
             raw_labels = batch["label_name"]
             labels = torch.tensor([class_to_idx[lbl] for lbl in raw_labels], dtype=torch.long, device=device)

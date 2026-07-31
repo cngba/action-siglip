@@ -174,7 +174,7 @@ def main():
     # 1. Parse unified config options from CLI arguments
     parser = argparse.ArgumentParser(description="SigLIP 2 PEFT Ablation Engine")
     parser.add_argument('--config', '-cfg', default='configs/ucf101.yaml', help='Path to the unified YAML file')
-    parser.add_argument('--mode', '-m', default='train_full_peft', help='Target mode matrix selection from YAML')
+    parser.add_argument('--mode', '-m', help='Target mode matrix selection from YAML')
     args = parser.parse_args()
     
     if not os.path.exists(args.config):
@@ -186,7 +186,6 @@ def main():
     if "modes" not in raw_yaml or args.mode not in raw_yaml["modes"]:
         raise KeyError(f"Selected target mode configuration option '{args.mode}' not discovered in the YAML map matrix.")
 
-    # 2. Extract shared global keys into a flat runtime dictionary configuration
     config = {
         "model_name": raw_yaml.get("model_name", "google/siglip2-base-patch16-224"),
         "seed": raw_yaml.get("seed", 1024),
@@ -197,7 +196,6 @@ def main():
         "num_workers": raw_yaml["data"]["workers"]
     }
     
-    # 3. Dynamically merge current mode specific hyper-parameters onto flat runtime config
     mode_specific_config = raw_yaml["modes"][args.mode]
     config.update(mode_specific_config)
     
