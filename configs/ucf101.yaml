@@ -174,7 +174,7 @@ modes:
     lr_head: 1.0e-3             
     weight_decay: 0.1          
     
-    num_epochs: 10
+    num_epochs: 5
     scheduler_t_max: 10
     early_stopping_patience: 5
 

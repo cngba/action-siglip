@@ -18,10 +18,10 @@ modes:
     weight_decay: 0.01
     checkpoint_dir: "checkpoints/ssv2"
     prompt_type: "manual"
-    manual_prompt_template: "A video of a person {}"
+    manual_prompt_template: "{}"
     cocoop_hidden_dim: 512
     lora_r: 16
-    lora_alpha: 32
+    lora_alpha: 16
     lora_dropout: 0.1
     lora_target_modules: ["q_proj", "v_proj"]
     unfreeze_backbone: false
@@ -35,10 +35,10 @@ modes:
     weight_decay: 0.01
     checkpoint_dir: "checkpoints/ssv2"
     prompt_type: "manual"
-    manual_prompt_template: "A video of a person {}"
+    manual_prompt_template: "{}"
     cocoop_hidden_dim: 512
     lora_r: 16
-    lora_alpha: 32
+    lora_alpha: 16
     lora_dropout: 0.1
     lora_target_modules: ["q_proj", "v_proj"]
     unfreeze_backbone: false

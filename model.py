@@ -38,29 +38,37 @@ class LoRALinear(nn.Module):
 class HybridTemporalModule(nn.Module):
     def __init__(self, dim=768, num_heads=8, kernel_size=3):
         super().__init__()
+        # 1. Local Temporal Convolution
         self.conv = nn.Conv1d(in_channels=dim, out_channels=dim, kernel_size=kernel_size, padding=kernel_size // 2)
+        
+        # 2. Global Temporal Attention
         self.attn = nn.MultiheadAttention(embed_dim=dim, num_heads=num_heads, batch_first=True)
-        self.alpha = nn.Parameter(torch.tensor(0.1))
-        self.beta = nn.Parameter(torch.tensor(0.1))
-        self.norm = nn.LayerNorm(dim)
-        self.gru = nn.GRU(input_size=dim, hidden_size=dim // 2, bidirectional=True, batch_first=True)
-        self.q_pool = nn.Parameter(torch.randn(dim, 1))
-        nn.init.trunc_normal_(self.q_pool, std=0.02)
+        
+        self.norm1 = nn.LayerNorm(dim)
+        self.norm2 = nn.LayerNorm(dim)
+        
+        # 3. Zero-initialized projection layer
+        self.proj = nn.Linear(dim, dim)
+        nn.init.zeros_(self.proj.weight)
+        nn.init.zeros_(self.proj.bias)
 
     def forward(self, x):
-        x_transpose = x.transpose(1, 2)
-        x_conv = F.gelu(self.conv(x_transpose)).transpose(1, 2)
-        x_attn, _ = self.attn(x, x, x)
-        x_fuse = x + self.alpha * x_conv + self.beta * x_attn
-        x_ln = self.norm(x_fuse)
-        x_gru, _ = self.gru(x_ln)
+        # x shape: (B, T, C)
+        residual = x
         
-        C_sqrt = (x_gru.size(-1) ** 0.5)
-        attn_logits = (x_gru @ self.q_pool) / C_sqrt
-        a = F.softmax(attn_logits, dim=1)
-        v = (x_gru * a).sum(dim=1)
+        # Local motion aggregation
+        x_conv = self.conv(x.transpose(1, 2)).transpose(1, 2)
+        x = self.norm1(residual + F.gelu(x_conv))
+        
+        # Global motion aggregation
+        x_attn, _ = self.attn(x, x, x)
+        x = self.norm2(x + x_attn)
+        
+        # Project and Temporal Mean Pool
+        temporal_features = self.proj(x) 
+        v = temporal_features.mean(dim=1)
+        
         return v
-
 
 class MetaNet(nn.Module):
     def __init__(self, dim, hidden_dim=512, num_prompt_tokens=4):
@@ -192,16 +200,25 @@ class Siglip2ActionModel(nn.Module):
 
         base_v = spatial_features_norm.mean(dim=1)
         temporal_v = self.temporal_module(spatial_features) 
-        v = base_v + self.gamma * temporal_v
+        
+        if is_zero_shot:
+            v = base_v
+        else:
+            v = base_v + self.gamma * temporal_v
+
         v_norm = F.normalize(v, p=2, dim=-1)
         
         # --- 2. TEXT ENCODER & PROMPTS ---
         target_classes = unseen_class_names if (is_zero_shot and unseen_class_names is not None) else self.class_names
         K = len(target_classes)
 
-        clean_classes = [re.sub(r'([a-z])([A-Z])', r'\1 \2', c).lower() for c in target_classes]
-        text_prompts = [self.manual_prompt_template.format(c) for c in clean_classes]
+        clean_classes = [
+            re.sub(r'([a-z])([A-Z])', r'\1 \2', c).lower().replace("something", "an object") 
+            for c in target_classes
+        ]
 
+        text_prompts = [self.manual_prompt_template.format(c) for c in clean_classes]
+        
         inputs = self.processor(text=text_prompts, return_tensors="pt", padding=True, max_length=64, truncation=True).to(device)
         input_ids = inputs["input_ids"]
 

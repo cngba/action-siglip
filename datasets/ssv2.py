@@ -53,7 +53,6 @@ class SSv2VideoDataset(Dataset):
         # Step 4: Transformations
         self.train_transforms = v2.Compose([
             v2.RandomResizedCrop(size=(224, 224), scale=(0.8, 1.0), antialias=True),
-            v2.RandomHorizontalFlip(p=0.5),
             v2.ToDtype(torch.float32, scale=True),
             v2.Normalize(mean=mean, std=std),
         ])

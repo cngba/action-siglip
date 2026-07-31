@@ -87,19 +87,42 @@ class UCF101VideoDataset(Dataset):
 
 
     def _load_split(self):
-        video_list = []
-        # Chống Leakage: Test dùng testlist, Train và Val dùng chung trainlist
-        prefix = 'test' if self.mode == 'test' else 'train'
-        list_file = os.path.join(self.annotation_dir, f'{prefix}list0{self.split}.txt')
-        
+        # 1. Zero-Shot evaluation / Pure Testing reads directly from testlist0X.txt
+        if self.mode == 'test':
+            list_file = os.path.join(self.annotation_dir, f'testlist0{self.split}.txt')
+            if not os.path.exists(list_file):
+                raise FileNotFoundError(f"Missing split file at: {list_file}")
+
+            video_list = []
+            with open(list_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line: continue
+                    parts = line.split()
+                    vid_path = parts[0]
+                    class_name = vid_path.split('/')[0]
+                    
+                    if class_name in self.label_to_id:
+                        if self.allowed_classes is not None and len(self.allowed_classes) > 0:
+                            if class_name not in self.allowed_classes:
+                                continue
+                        label_id = self.label_to_id[class_name]
+                        video_list.append((vid_path, label_id))
+            logger.info(f"Loaded {len(video_list)} videos for TEST mode from split {self.split}.")
+            return video_list
+
+        # 2. Train and Val mode: Load from trainlist0X.txt using GROUP-BASED SPLITTING (Prevent Leakage)
+        list_file = os.path.join(self.annotation_dir, f'trainlist0{self.split}.txt')
         if not os.path.exists(list_file):
             raise FileNotFoundError(f"Missing split file at: {list_file}")
+
+        from collections import defaultdict
+        groups_dict = defaultdict(list)
 
         with open(list_file, 'r', encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
-                if not line:
-                    continue
+                if not line: continue
                 parts = line.split()
                 vid_path = parts[0]
                 class_name = vid_path.split('/')[0]
@@ -110,23 +133,29 @@ class UCF101VideoDataset(Dataset):
                             continue
 
                     label_id = self.label_to_id[class_name]
-                    video_list.append((vid_path, label_id))
+                    
+                    # Extract Group Identifier (e.g., 'v_ApplyEyeMakeup_g01_c01.avi' -> 'ApplyEyeMakeup_g01')
+                    filename = os.path.basename(vid_path)
+                    group_id = "_".join(filename.split("_")[:3])
+                    
+                    groups_dict[group_id].append((vid_path, label_id))
 
-        # --- XỬ LÝ CHIA 80/20 CHO TRAIN VÀ VAL ---
-        if self.mode in ['train', 'val']:
-            # Sử dụng random cục bộ với seed cố định để đảm bảo file chia luôn giống nhau 
-            # ở mọi lần chạy, không làm ảnh hưởng đến random global của PyTorch.
-            rng = random.Random(42)
-            rng.shuffle(video_list)
-            
-            split_idx = int(len(video_list) * 0.8) # 80% Train
-            
-            if self.mode == 'train':
-                video_list = video_list[:split_idx]
-            elif self.mode == 'val':
-                video_list = video_list[split_idx:]
+        # Sort keys for absolute reproducibility across environments
+        sorted_groups = sorted(list(groups_dict.keys()))
+        rng = random.Random(42)
+        rng.shuffle(sorted_groups)
 
-        logger.info(f"Loaded {len(video_list)} videos for mode '{self.mode}' from split {self.split}.")
+        split_idx = int(len(sorted_groups) * 0.8)
+        train_groups = set(sorted_groups[:split_idx])
+        val_groups = set(sorted_groups[split_idx:])
+
+        selected_groups = train_groups if self.mode == 'train' else val_groups
+        
+        video_list = []
+        for g in selected_groups:
+            video_list.extend(groups_dict[g])
+
+        logger.info(f"Loaded {len(video_list)} videos for mode '{self.mode}' (Groups: {len(selected_groups)}) from split {self.split}.")
         return video_list
     
     def __len__(self):
@@ -143,7 +172,7 @@ class UCF101VideoDataset(Dataset):
             start = int(i * seg_size)
             end = int((i + 1) * seg_size)
             if self.mode == 'train':
-                idx = random.randint(start, max(start, end - 1))
+                idx = np.random.randint(start, max(start, end - 1))
             else:
                 idx = start + (end - start) // 2
             indices.append(idx)

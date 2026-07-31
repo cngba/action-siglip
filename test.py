@@ -256,7 +256,7 @@ if __name__ == "__main__":
         "annotation_dir": config["annotation_dir"],
         "processor": processor,
         "num_frames": config["num_frames"],
-        "mode": "val" if is_zs_mode else "test",
+        "mode": "test",
         "prompt_template": config.get("manual_prompt_template", "A video of a person performing {}"),
         "allowed_classes": target_classes
     }
