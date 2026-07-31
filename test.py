@@ -27,7 +27,6 @@ except ImportError:
     wandb = None
 
 from model import Siglip2ActionModel
-from datasets import UCF101VideoDataset
 
 
 def setup_logging(output_dir):
@@ -71,59 +70,74 @@ def validate(epoch, dataloader, model, device, unseen_class_names=None, is_zero_
     total_videos = 0
 
     base_model = getattr(model, "module", model)
-
     target_classes = unseen_class_names if (is_zero_shot and unseen_class_names is not None) else base_model.class_names
     
-    # Bắt buộc map tên lớp nguyên bản (VD: 'ApplyEyeMakeup') sang index [0 ... K-1] của Logits Matrix
+    # Map class name to index [0 ... K-1]
     class_to_idx = {name: idx for idx, name in enumerate(target_classes)}
-    # Target class selection based on scenario
     desc_msg = f"Zero-Shot Evaluation" if is_zero_shot else f"Validation (Epoch {epoch})"
     
+    has_labels = True
+
     for batch in tqdm(dataloader, desc=desc_msg, file=sys.stdout):
         pixel_values = batch["pixel_values"].to(device)
         
-        # label index thu được trùng khớp 100% với vị trí cột Logits
+        # Determine labels if present
         if "label_name" in batch:
             raw_labels = batch["label_name"]
             labels = torch.tensor([class_to_idx[lbl] for lbl in raw_labels], dtype=torch.long, device=device)
-        else:
+        elif "label_id" in batch and batch["label_id"] is not None:
             labels = batch["label_id"].to(device)
-            
-        total_videos += labels.size(0)
+        else:
+            # For unannotated test sets (e.g. SSv2 test.json)
+            has_labels = False
+            labels = None
+
+        batch_size = pixel_values.size(0)
+        total_videos += batch_size
         
         # Modern PyTorch Autocast API
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16 if device.type == "cuda" else torch.float32):
-            # FIX: Truyền target_classes vào unseen_class_names để Model và Validation dùng chung 1 List
             logits = model(pixel_values, unseen_class_names=target_classes, is_zero_shot=is_zero_shot)
 
-            loss = criterion(logits, labels)
-            total_val_loss += loss.item() * labels.size(0)
+            if has_labels and labels is not None:
+                loss = criterion(logits, labels)
+                total_val_loss += loss.item() * batch_size
         
         _, predicted = torch.max(logits, 1)
         all_preds.extend(predicted.cpu().numpy())
-        all_labels.extend(labels.cpu().numpy())
         all_logits.append(logits.cpu())
-            
+
+        if has_labels and labels is not None:
+            all_labels.extend(labels.cpu().numpy())
+
     end_time = time.time()
     inference_duration = end_time - start_time
-    
     all_logits = torch.cat(all_logits, dim=0)
-    all_labels = np.array(all_labels)
     all_preds = np.array(all_preds)
 
+    # If dataset has no labels (e.g. unlabeled test set), output predictions summary only
+    if not has_labels or len(all_labels) == 0:
+        print("\n" + "="*50 + "\n          UNLABELED TEST EVALUATION COMPLETE           \n" + "="*50)
+        print(f"Total Processed Videos: {total_videos}")
+        print(f"Inference Duration:     {inference_duration:.2f}s")
+        print(f"Throughput:             {(total_videos / max(0.001, inference_duration)):.2f} clips/sec")
+        print("="*50 + "\n")
+        return {"total_videos": total_videos}
+
+    all_labels = np.array(all_labels)
     avg_val_loss = total_val_loss / max(1, total_videos)
     
     # 1. Top-1 Target Calculation
     top1_acc = accuracy_score(all_labels, all_preds) * 100
     
-    # 2. Top-5 Target Calculation (dynamically bounded by class count)
+    # 2. Top-5 Target Calculation
     num_classes = all_logits.shape[1]
     k = min(5, num_classes)
     _, topk_indices = torch.topk(all_logits, k, dim=1)
     topk_correct = topk_indices.eq(torch.tensor(all_labels).view(-1, 1)).sum().item()
     top5_acc = (topk_correct / total_videos) * 100
 
-    # 3. Macro Target Precision, Recall, and F1 calculations
+    # 3. Precision, Recall, and F1 calculations
     precision, recall, f1, _ = precision_recall_fscore_support(
         all_labels, all_preds, average='macro', zero_division=0
     )
@@ -190,7 +204,7 @@ if __name__ == "__main__":
         "seed": raw_yaml.get("seed", 1024),
         "base_dir": raw_yaml["data"]["base_dir"],
         "annotation_dir": raw_yaml["data"]["annotation_dir"],
-        "split": raw_yaml["data"]["split"],
+        "split": raw_yaml["data"].get("split", 1),
         "num_frames": raw_yaml["data"]["num_segments"],
         "num_workers": raw_yaml["data"]["workers"]
     }
@@ -214,34 +228,44 @@ if __name__ == "__main__":
     
     logging.info("Constructing video datasets validation loader configurations...")
 
-    # 1. Định tuyến Dataset linh hoạt từ file cấu hình YAML
-    dataset_name = config.get("dataset", "ucf101").lower()
+    # Dynamic Dataset Routing
+    dataset_name = config.get("dataset", raw_yaml.get("data", {}).get("dataset", "ucf101")).lower()
+    
     if dataset_name == "hmdb51":
         from datasets.hmdb51 import HMDB51VideoDataset as ActionDataset
         logging.info("=> Routing to HMDB51 Data Pipeline")
+    elif dataset_name in ["ssv2", "something-something-v2"]:
+        from datasets.ssv2 import SSv2VideoDataset as ActionDataset
+        logging.info("=> Routing to SSv2 Data Pipeline")
     else:
         from datasets.ucf101 import UCF101VideoDataset as ActionDataset
         logging.info("=> Routing to UCF101 Data Pipeline")
     
-    # 2. Nhận diện các mode Zero-Shot (zero_shot, zero_shot_hmdb, zero_shot_fft, v.v.)
+    # Zero-Shot mode check
     is_zs_mode = ("zero_shot" in args.mode)
 
-    # 3. Nạp danh sách class tương ứng
+    # Class list selection
     if is_zs_mode:
         target_classes = raw_yaml.get("zero_shot_splits", {}).get("unseen_class_names", None)
     else:
         target_classes = raw_yaml.get("zero_shot_splits", {}).get("seen_class_names", None)
     
-    val_dataset = ActionDataset(
-        base_dir=config["base_dir"], 
-        annotation_dir=config["annotation_dir"], 
-        processor=processor, 
-        split=config["split"],
-        num_frames=config["num_frames"], 
-        mode='test',
-        prompt_template=config.get("manual_prompt_template", "A video of a person performing {}"),
-        allowed_classes=target_classes
-    )
+    # Build dataset kwargs dynamically
+    dataset_kwargs = {
+        "base_dir": config["base_dir"],
+        "annotation_dir": config["annotation_dir"],
+        "processor": processor,
+        "num_frames": config["num_frames"],
+        "mode": "val" if is_zs_mode else "test",
+        "prompt_template": config.get("manual_prompt_template", "A video of a person performing {}"),
+        "allowed_classes": target_classes
+    }
+
+    # Pass split parameter only if supported
+    if dataset_name not in ["ssv2", "something-something-v2"]:
+        dataset_kwargs["split"] = config["split"]
+
+    val_dataset = ActionDataset(**dataset_kwargs)
     
     g_val = torch.Generator()
     g_val.manual_seed(config["seed"])
@@ -302,15 +326,12 @@ if __name__ == "__main__":
         logging.info(f"Loading fine-tuned checkpoint weights directly from: {checkpoint_target}")
         checkpoint = torch.load(checkpoint_target, map_location=device, weights_only=False)
         
-        # Lấy state_dict từ checkpoint an toàn
         state_dict = checkpoint['model_state_dict'] if 'model_state_dict' in checkpoint else checkpoint
         
-        # Xử lý prefix 'module.' và ánh xạ lại tên biến 'temporal_module'
         clean_state_dict = {}
         for k, v in state_dict.items():
             name = k.replace('module.', '')
             
-            # Dịch tên biến cũ sang kiến trúc mới
             if name.startswith('temporal_') and not name.startswith('temporal_module.'):
                 name = name.replace('temporal_', 'temporal_module.')
                 
@@ -322,11 +343,10 @@ if __name__ == "__main__":
         logging.warning(f"No checkpoint matched at destination: '{checkpoint_target}'. "
                         f"Evaluating vanilla pre-trained weights instead.")
 
-    # Accelerate inference if multiple GPUs are available
+    # Multi-GPU support
     if torch.cuda.device_count() > 1:
         logging.info(f"Multi-GPU detected! Wrapping model in DataParallel for faster evaluation.")
         model = nn.DataParallel(model)
-
 
     if wandb:
         project_name = "action-siglip2-zeroshot" if is_zs_mode else "action-siglip2-peft-eval"
