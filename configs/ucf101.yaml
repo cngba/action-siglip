@@ -181,7 +181,7 @@ modes:
   # ---------------------------------------------------------
   # MODE 3: FULL FINE-TUNING (Unfrozen Base + Train Custom Heads)
   # ---------------------------------------------------------
-  final_fft_zsl:
+  final_fft_zero_shot:
     checkpoint_dir: "./exp/siglip2_peft/ucf101/final_fft_zsl"
     log_file: "./exp/siglip2_peft/ucf101/final_fft_zsl/session.log"
     
@@ -217,4 +217,4 @@ modes:
     lora_alpha: 16.0
     lora_dropout: 0.05
     lora_target_modules: ["q_proj","v_proj"]
-    batch_size: 16
+    batch_size: 32
