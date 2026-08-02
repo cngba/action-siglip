@@ -228,9 +228,7 @@ def main():
         )
 
     dataset_name = config.get("dataset", "ucf101").lower()
-    if dataset_name == "hmdb51":
-        from datasets import HMDB51VideoDataset as ActionDataset
-    elif dataset_name in ["ssv2", "something-something-v2"]:
+    if dataset_name in ["ssv2", "something-something-v2"]:
         from datasets import SSv2VideoDataset as ActionDataset
     else:
         from datasets import UCF101VideoDataset as ActionDataset

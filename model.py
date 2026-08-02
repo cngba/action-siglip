@@ -141,8 +141,6 @@ class Siglip2ActionModel(nn.Module):
 
         self.temporal_module = HybridTemporalModule(dim=embedding_dim)
         
-        # --- FIX 2: THÊM LEARNABLE GATE GAMMA ĐỂ BẢO TỒN KHÔNG GIAN ZSL ---
-        # Khởi tạo gamma = 0 để ban đầu mô hình dùng 100% feature chuẩn của SigLIP 2
         self.gamma = nn.Parameter(torch.zeros(1))
         
         if self.prompt_type == "cocoop":

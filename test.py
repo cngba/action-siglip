@@ -16,7 +16,8 @@ from tqdm import tqdm
 from torch.utils.data import DataLoader
 from transformers import AutoProcessor
 from peft import LoraConfig
-from sklearn.metrics import precision_recall_fscore_support, accuracy_score
+from sklearn.metrics import precision_recall_fscore_support, accuracy_score, confusion_matrix
+import matplotlib.pyplot as plt
 
 # Prevent diagnostic network verification calls over HTTPS layers
 os.environ["HF_HUB_OFFLINE"] = "1"
@@ -51,7 +52,31 @@ def setup_logging(output_dir):
     logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
     return log_file
 
+def save_confusion_matrix(labels, preds, class_names, output_path):
+    cm = confusion_matrix(labels, preds)
 
+    cm = cm.astype(np.float32)
+    cm /= cm.sum(axis=1, keepdims=True)
+    cm = np.nan_to_num(cm)
+
+    fig_size = max(8, len(class_names) * 0.4)
+
+    plt.figure(figsize=(fig_size, fig_size))
+    plt.imshow(cm, cmap="Blues", vmin=0, vmax=1)
+    plt.colorbar(label="Accuracy")
+
+    tick_marks = np.arange(len(class_names))
+    plt.xticks(tick_marks, class_names, rotation=90, fontsize=8)
+    plt.yticks(tick_marks, class_names, fontsize=8)
+
+    plt.xlabel("Predicted")
+    plt.ylabel("Ground Truth")
+    plt.title("Normalized Confusion Matrix")
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300)
+    plt.close()
+        
 @torch.no_grad()
 def validate(epoch, dataloader, model, device, unseen_class_names=None, is_zero_shot=False):
     """
@@ -231,10 +256,7 @@ if __name__ == "__main__":
     # Dynamic Dataset Routing
     dataset_name = config.get("dataset", raw_yaml.get("data", {}).get("dataset", "ucf101")).lower()
     
-    if dataset_name == "hmdb51":
-        from datasets.hmdb51 import HMDB51VideoDataset as ActionDataset
-        logging.info("=> Routing to HMDB51 Data Pipeline")
-    elif dataset_name in ["ssv2", "something-something-v2"]:
+    if dataset_name in ["ssv2", "something-something-v2"]:
         from datasets.ssv2 import SSv2VideoDataset as ActionDataset
         logging.info("=> Routing to SSv2 Data Pipeline")
     else:
@@ -356,7 +378,6 @@ if __name__ == "__main__":
             config=config
         )
 
-    # Execute evaluation pass
     validate(
         epoch=current_epoch, 
         dataloader=val_loader, 
