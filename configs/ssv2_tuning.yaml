@@ -1,0 +1,163 @@
+# ==============================================================================
+# Global Configuration for Something-Something V2 (SSv2)
+# ==============================================================================
+model_name: "google/siglip2-base-patch16-224"
+seed: 1024
+
+data:
+  dataset: "ssv2"
+  num_classes: 174                          # SSv2 có 174 classes
+  base_dir: "/root/data/20bn-something-something-v2"
+  annotation_dir: "/root/data/labels"
+  split: 1                                  # Ignored for SSv2
+  num_segments: 8
+  workers: 8
+
+# ==============================================================================
+# Mode Matrices for Hyperparameter Tuning (SSv2 Warm-Start)
+# ==============================================================================
+modes:
+  # ---------------------------------------------------------
+  # MODE 1: NO LORA (Frozen Base + Train Custom Heads)
+  # ---------------------------------------------------------
+  tuning_no_lora:
+    checkpoint_dir: "./exp/siglip2_peft/ssv2/tuning_no_lora"
+    log_file: "./exp/siglip2_peft/ssv2/tuning_no_lora/session.log"
+    
+    unfreeze_backbone: false
+    prompt_type: "manual"
+    manual_prompt_template: "{}"            # SSv2 label đã là câu hoàn chỉnh (VD: "Pushing something...")
+    cocoop_hidden_dim: 512
+    
+    lora_r: 0
+    lora_alpha: 0.0
+    lora_dropout: 0.0
+    lora_target_modules: []
+
+    # --- Tuning Parameters ---
+    batch_size: 32              
+    accumulation_steps: 1       
+    lr_base: 0.0                
+    
+    lr_head: 1.0e-3             # [TUNING] Thử: 1.0e-3, 3.0e-3, 5.0e-3 (SSv2 cần Head học mạnh hơn)
+    weight_decay: 0.1           # [TUNING] Thử: 0.05, 0.1 (Điều chuẩn mạnh hơn UCF101)
+    
+    # --- Coarse-to-Fine Phase 1 Settings ---
+    num_epochs: 5               # [TUNING PHASE 1] SSv2 rất nặng, quét siêu nhanh 5 epoch
+    early_stopping_patience: 3  
+
+  # ---------------------------------------------------------
+  # MODE 2: WITH LORA (Frozen Base + LoRA + Train Custom Heads)
+  # ---------------------------------------------------------
+  tuning_with_lora_lr_base_1.0e-4:
+    checkpoint_dir: "./exp/siglip2_peft/ssv2/tuning_with_lora_lr_base_1.0e-4"
+    log_file: "./exp/siglip2_peft/ssv2/tuning_with_lora_lr_base_1.0e-4/session.log"
+
+    resume: "/root/action-siglip/exp/siglip2_peft/ssv2/tuning_with_lora_lr_base_1.0e-4/20260803_193750_tuning_with_lora_lr_base_1.0e-4_8f/best_model.pt"
+    
+    unfreeze_backbone: false
+    prompt_type: "manual"
+    manual_prompt_template: "{}"
+    cocoop_hidden_dim: 512
+    
+    lora_r: 8                  # Cố định r=16 theo config base của bạn
+    lora_alpha: 16.0            
+    lora_dropout: 0.1           
+    lora_target_modules: ["q_proj", "v_proj"]
+
+    # --- Tuning Parameters ---
+    batch_size: 16              
+    accumulation_steps: 2       
+    
+    lr_base: 1.0e-4             # [TUNING] Thử: 1.0e-4, 3.0e-4, 5.0e-4
+    lr_head: 1.0e-3             # [TUNING] Thử: 1.0e-3, 2.0e-3, 3.0e-3
+    weight_decay: 0.05           # [TUNING] Thử: 0.05, 0.1
+    
+    # --- Coarse-to-Fine Phase 1 Settings ---
+    num_epochs: 10               
+    early_stopping_patience: 3 
+
+  tuning_with_lora_lr_base_3.0e-4:
+    checkpoint_dir: "./exp/siglip2_peft/ssv2/tuning_with_lora_lr_base_3.0e-4"
+    log_file: "./exp/siglip2_peft/ssv2/tuning_with_lora_lr_base_3.0e-4/session.log"
+
+    resume: "/root/action-siglip/exp/siglip2_peft/ssv2/tuning_with_lora_lr_base_3.0e-4/20260804_071531_tuning_with_lora_lr_base_3.0e-4_8f/best_model.pt"
+    
+    unfreeze_backbone: false
+    prompt_type: "manual"
+    manual_prompt_template: "{}"
+    cocoop_hidden_dim: 512
+    
+    lora_r: 8                  # Cố định r=16 theo config base của bạn
+    lora_alpha: 16.0            
+    lora_dropout: 0.1           
+    lora_target_modules: ["q_proj", "v_proj"]
+
+    # --- Tuning Parameters ---
+    batch_size: 16              
+    accumulation_steps: 2       
+    
+    lr_base: 3.0e-4             # [TUNING] Thử: 1.0e-4, 3.0e-4, 5.0e-4
+    lr_head: 1.0e-3             # [TUNING] Thử: 1.0e-3, 2.0e-3, 3.0e-3
+    weight_decay: 0.05           # [TUNING] Thử: 0.05, 0.1
+    
+    # --- Coarse-to-Fine Phase 1 Settings --- 
+    num_epochs: 10               
+    early_stopping_patience: 3 
+
+  tuning_with_lora_lr_base_5.0e-4:
+    checkpoint_dir: "./exp/siglip2_peft/ssv2/tuning_with_lora_lr_base_5.0e-4"
+    log_file: "./exp/siglip2_peft/ssv2/tuning_with_lora_lr_base_5.0e-4/session.log"
+    
+    resume: "/root/action-siglip/exp/siglip2_peft/ssv2/tuning_with_lora_lr_base_5.0e-4/20260804_223222_tuning_with_lora_lr_base_5.0e-4_8f/best_model.pt"
+
+    unfreeze_backbone: false
+    prompt_type: "manual"
+    manual_prompt_template: "{}"
+    cocoop_hidden_dim: 512
+    
+    lora_r: 8                  # Cố định r=16 theo config base của bạn
+    lora_alpha: 16.0            
+    lora_dropout: 0.1           
+    lora_target_modules: ["q_proj", "v_proj"]
+
+    # --- Tuning Parameters ---
+    batch_size: 16              
+    accumulation_steps: 2       
+    
+    lr_base: 5.0e-4             # [TUNING] Thử: 1.0e-4, 3.0e-4, 5.0e-4
+    lr_head: 1.0e-3             # [TUNING] Thử: 1.0e-3, 2.0e-3, 3.0e-3
+    weight_decay: 0.05           # [TUNING] Thử: 0.05, 0.1
+    
+    # --- Coarse-to-Fine Phase 1 Settings ---
+    num_epochs: 10               
+    early_stopping_patience: 3
+
+  # ---------------------------------------------------------
+  # MODE 3: FULL FINE-TUNING (Unfrozen Base + Train Custom Heads)
+  # ---------------------------------------------------------
+  tuning_fft:
+    checkpoint_dir: "./exp/siglip2_peft/ssv2/tuning_fft"
+    log_file: "./exp/siglip2_peft/ssv2/tuning_fft/session.log"
+    
+    unfreeze_backbone: true     
+    prompt_type: "manual"
+    manual_prompt_template: "{}"
+    cocoop_hidden_dim: 512
+    
+    lora_r: 0
+    lora_alpha: 0.0
+    lora_dropout: 0.0
+    lora_target_modules: []
+
+    # --- Tuning Parameters ---
+    batch_size: 8               
+    accumulation_steps: 4       
+    
+    lr_base: 2.0e-5             # [TUNING] Thử: 1.0e-5, 2.0e-5, 5.0e-5
+    lr_head: 3.0e-4             # [TUNING] Thử: 3.0e-4, 5.0e-4
+    weight_decay: 0.1           # [TUNING] Thử: 0.05, 0.1
+    
+    # --- Coarse-to-Fine Phase 1 Settings ---
+    num_epochs: 5               
+    early_stopping_patience: 3
