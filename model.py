@@ -122,16 +122,6 @@ class Siglip2ActionModel(nn.Module):
         self.temporal_module = HybridTemporalModule(dim=embedding_dim)
         
         self.gamma = nn.Parameter(torch.ones(1) * 0.1)
-<<<<<<< HEAD
-=======
-        
-        if self.prompt_type == "cocoop":
-            self.meta_net = MetaNet(dim=embedding_dim, hidden_dim=cocoop_hidden_dim, num_prompt_tokens=4)
-        elif self.prompt_type == "manual":
-            self.meta_net = None
-        else:
-            raise ValueError(f"Unsupported prompt_type: {self.prompt_type}")
->>>>>>> origin/main
 
     def _apply_lora_to_encoder(self, encoder, r, alpha, name, target_modules):
         num_injected = 0
