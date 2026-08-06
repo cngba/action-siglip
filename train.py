@@ -27,6 +27,7 @@ from peft import LoraConfig
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from transformers import AutoProcessor
+from transformers import get_cosine_schedule_with_warmup
 
 try:
     import wandb
@@ -129,6 +130,7 @@ def run_train_epoch(epoch, model, dataloader, criterion, optimizer, scheduler, d
 
         if (i + 1) % accumulation_steps == 0 or (i + 1) == len(dataloader):
             optimizer.step()
+            scheduler.step()
             optimizer.zero_grad()
 
         running_loss += (loss.item() * accumulation_steps)
@@ -140,7 +142,8 @@ def run_train_epoch(epoch, model, dataloader, criterion, optimizer, scheduler, d
 
         progress_bar.set_postfix({
             "Loss": f"{(loss.item() * accumulation_steps):.4f}", 
-            "Acc": f"{100 * correct / total:.2f}%"
+            "Acc": f"{100 * correct / total:.2f}%",
+            "LR": f"{scheduler.get_last_lr()[0]:.2e}"
         })
         
     epoch_loss = running_loss / len(dataloader)
@@ -150,7 +153,7 @@ def run_train_epoch(epoch, model, dataloader, criterion, optimizer, scheduler, d
     if torch.cuda.is_available():
         peak_vram = torch.cuda.max_memory_allocated() / (1024 ** 3)
 
-    scheduler.step()
+    # scheduler.step()
     return epoch_loss, epoch_acc, peak_vram
     
 def main():
@@ -312,9 +315,7 @@ def main():
     model = Siglip2ActionModel(
         model_name=config["model_name"],
         class_names=class_names_list,
-        prompt_type=config["prompt_type"],
-        manual_prompt_template=config["manual_prompt_template"],
-        cocoop_hidden_dim=config["cocoop_hidden_dim"],
+        manual_prompt_template=config.get("manual_prompt_template", "A video of a person performing {}"),
         lora_config=lora_config,
         unfreeze_backbone=config.get("unfreeze_backbone", False)
     )
@@ -363,7 +364,7 @@ def main():
             continue
         if "lora" in n:
             lora_params.append(p)
-        elif "temporal" in n or "meta_net" in n or "gamma" in n: # FIX: Added gamma
+        elif "temporal" in n or "gamma" in n:
             custom_head_params.append(p)
         else:
             other_params.append(p)
@@ -378,7 +379,32 @@ def main():
         param_groups.append({"params": other_params, "lr": config.get("lr_base", 1e-4)})
 
     optimizer = optim.AdamW(param_groups, weight_decay=config["weight_decay"])    
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.get("scheduler_t_max", config["num_epochs"]))
+    # scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.get("scheduler_t_max", config["num_epochs"]))
+
+    # Cấu hình Linear Warmup với Cosine Decay
+    accumulation_steps = config.get("accumulation_steps", 1)
+    # Tính tổng số step huấn luyện
+    steps_per_epoch = len(train_loader) // accumulation_steps
+    total_steps = steps_per_epoch * config["num_epochs"]
+    
+    # Số epoch dùng để warmup, thiết lập mặc định là 5, hoặc lấy từ config nếu có
+    warmup_epochs = config.get("warmup_epochs", 5)
+    
+    # Nếu tổng số epoch ít hơn hoặc bằng warmup epoch, chuyển thành warmup chiếm 10% tổng thời gian
+    if config["num_epochs"] <= warmup_epochs:
+        warmup_steps = int(0.1 * total_steps)
+        logger.warning(f"Total epochs ({config['num_epochs']}) is less than or equal to requested warmup epochs ({warmup_epochs}). "
+                       f"Adjusting warmup steps to 10% of total steps ({warmup_steps}).")
+    else:
+        warmup_steps = steps_per_epoch * warmup_epochs
+        logger.info(f"Applying Linear Warmup for {warmup_epochs} epochs ({warmup_steps} steps). Total steps: {total_steps}.")
+
+    # Khởi tạo Scheduler với transformers API
+    scheduler = get_cosine_schedule_with_warmup(
+        optimizer, 
+        num_warmup_steps=warmup_steps, 
+        num_training_steps=total_steps
+    )
 
     os.makedirs(config["checkpoint_dir"], exist_ok=True)
     start_epoch = 1
@@ -413,7 +439,7 @@ def main():
             epoch, model, train_loader, criterion, optimizer, scheduler, device, accumulation_steps
         )
         
-        metrics = test.validate(epoch, val_loader, model, device)
+        metrics = test.validate(epoch, val_loader, model, device, config=config)
         val_loss = metrics.get('val_loss', 0.0)
 
         epoch_time = time.time() - start_time # Kết thúc bấm giờ (giây)

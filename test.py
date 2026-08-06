@@ -54,13 +54,15 @@ def setup_logging(output_dir):
 
 def save_confusion_matrix(labels, preds, class_names, output_path):
     cm = confusion_matrix(labels, preds)
-
     cm = cm.astype(np.float32)
-    cm /= cm.sum(axis=1, keepdims=True)
+
+    # Chuẩn hóa để tránh chia cho 0
+    row_sums = cm.sum(axis=1, keepdims=True)
+    row_sums[row_sums == 0] = 1 
+    cm /= row_sums
     cm = np.nan_to_num(cm)
 
     fig_size = max(8, len(class_names) * 0.4)
-
     plt.figure(figsize=(fig_size, fig_size))
     plt.imshow(cm, cmap="Blues", vmin=0, vmax=1)
     plt.colorbar(label="Accuracy")
@@ -78,7 +80,7 @@ def save_confusion_matrix(labels, preds, class_names, output_path):
     plt.close()
         
 @torch.no_grad()
-def validate(epoch, dataloader, model, device, unseen_class_names=None, is_zero_shot=False):
+def validate(epoch, dataloader, model, device, unseen_class_names=None, is_zero_shot=False, config=None):
     """
     Clean evaluation checking loop computing metrics based on L2-normalized cosine similarities.
     Supports both traditional validation and Zero-Shot Learning scenarios.
@@ -184,6 +186,12 @@ def validate(epoch, dataloader, model, device, unseen_class_names=None, is_zero_
     print(f"Inference Time:  {inference_duration:.2f} seconds total")
     print(f"Throughput:      {(total_videos / max(0.001, inference_duration)):.2f} clips/sec")
     print("="*50 + "\n")
+
+    # Code lưu Confusion Matrix
+    if config and config.get("checkpoint_dir"):
+        cm_path = os.path.join(config["checkpoint_dir"], f"confusion_matrix_epoch_{epoch}.png")
+        save_confusion_matrix(all_labels, all_preds, target_classes, cm_path)
+        print(f"Saved confusion matrix to: {cm_path}")
 
     if wandb and wandb.run:
         try:
@@ -384,7 +392,8 @@ if __name__ == "__main__":
         model=model, 
         device=device, 
         unseen_class_names=unseen_classes, 
-        is_zero_shot=is_zs_mode
+        is_zero_shot=is_zs_mode,
+        config=config
     )
     
     if wandb:

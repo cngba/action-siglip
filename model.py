@@ -70,33 +70,13 @@ class HybridTemporalModule(nn.Module):
         
         return v
 
-class MetaNet(nn.Module):
-    def __init__(self, dim, hidden_dim=512, num_prompt_tokens=4):
-        super().__init__()
-        self.num_prompt_tokens = num_prompt_tokens
-        self.dim = dim
-        self.net = nn.Sequential(
-            nn.Linear(dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, num_prompt_tokens * dim)
-        )
-        nn.init.zeros_(self.net[-1].weight)
-        nn.init.zeros_(self.net[-1].bias)
-
-    def forward(self, v):
-        B = v.size(0)
-        delta_v = self.net(v)
-        return delta_v.view(B, self.num_prompt_tokens, self.dim)
-
 
 class Siglip2ActionModel(nn.Module):
     def __init__(
         self, 
         model_name: str, 
         class_names: list, 
-        prompt_type: str,
         manual_prompt_template: str,
-        cocoop_hidden_dim: int,
         lora_config: LoraConfig,
         unfreeze_backbone: bool = False
     ):
@@ -142,6 +122,8 @@ class Siglip2ActionModel(nn.Module):
         self.temporal_module = HybridTemporalModule(dim=embedding_dim)
         
         self.gamma = nn.Parameter(torch.ones(1) * 0.1)
+<<<<<<< HEAD
+=======
         
         if self.prompt_type == "cocoop":
             self.meta_net = MetaNet(dim=embedding_dim, hidden_dim=cocoop_hidden_dim, num_prompt_tokens=4)
@@ -149,6 +131,7 @@ class Siglip2ActionModel(nn.Module):
             self.meta_net = None
         else:
             raise ValueError(f"Unsupported prompt_type: {self.prompt_type}")
+>>>>>>> origin/main
 
     def _apply_lora_to_encoder(self, encoder, r, alpha, name, target_modules):
         num_injected = 0
@@ -227,29 +210,25 @@ class Siglip2ActionModel(nn.Module):
             if pad_token_id is None:
                 pad_token_id = 0
             attn_mask = (input_ids != pad_token_id).long()
+ 
+        text_outputs = self.model.get_text_features(input_ids=input_ids, attention_mask=attn_mask)
 
-        if self.prompt_type == "cocoop" and self.meta_net is not None:
-            # (CoCoOp logic remains as you have it...)
-            pass
-        else:  
-            text_outputs = self.model.get_text_features(input_ids=input_ids, attention_mask=attn_mask)
-
-            if not isinstance(text_outputs, torch.Tensor):
-                if hasattr(text_outputs, "text_embeds") and text_outputs.text_embeds is not None:
-                    text_outputs = text_outputs.text_embeds
-                elif hasattr(text_outputs, "pooler_output") and text_outputs.pooler_output is not None:
-                    text_outputs = text_outputs.pooler_output
-                    if hasattr(self.model, "text_projection"):
-                        text_outputs = self.model.text_projection(text_outputs)
-                else:
-                    text_outputs = text_outputs[1] 
-                    if hasattr(self.model, "text_projection"):
-                        text_outputs = self.model.text_projection(text_outputs)
+        if not isinstance(text_outputs, torch.Tensor):
+            if hasattr(text_outputs, "text_embeds") and text_outputs.text_embeds is not None:
+                text_outputs = text_outputs.text_embeds
+            elif hasattr(text_outputs, "pooler_output") and text_outputs.pooler_output is not None:
+                text_outputs = text_outputs.pooler_output
+                if hasattr(self.model, "text_projection"):
+                    text_outputs = self.model.text_projection(text_outputs)
+            else:
+                text_outputs = text_outputs[1] 
+                if hasattr(self.model, "text_projection"):
+                    text_outputs = self.model.text_projection(text_outputs)
+        
+        if not isinstance(text_outputs, torch.Tensor):
+            text_outputs = text_outputs[0]
             
-            if not isinstance(text_outputs, torch.Tensor):
-                text_outputs = text_outputs[0]
-                
-            t_features = F.normalize(text_outputs, p=2, dim=-1).unsqueeze(0).expand(B, -1, -1)
+        t_features = F.normalize(text_outputs, p=2, dim=-1).unsqueeze(0).expand(B, -1, -1)
 
         # --- 3. OUTPUTS ---
         logit_scale = self.model.logit_scale.exp() 
