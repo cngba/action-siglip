@@ -1,0 +1,212 @@
+# ==============================================================================
+# Global Configuration (Shared across all execution pipelines)
+# CỐ ĐỊNH CHO TẤT CẢ CÁC THỬ NGHIỆM ĐỂ ĐẢM BẢO CÔNG BẰNG
+# ==============================================================================
+model_name: "google/siglip2-base-patch16-224"
+seed: 1024
+
+data:
+  dataset: "ucf101"
+  num_classes: 101
+  num_segments: 8
+  base_dir: "/root/data/UCF-101"
+  annotation_dir: "/root/data/ucfTrainTestlist"
+  split: 1                                  
+  workers: 8
+
+# ==============================================================================
+# Mode Matrices for Hyperparameter Tuning & Baselines
+# CHIẾN LƯỢC: Coarse-to-Fine (Được thiết lập sẵn cho Giai Đoạn 1 - Lọc Nhanh)
+# ==============================================================================
+modes:
+  # ---------------------------------------------------------
+  # MODE 1: NO LORA (Frozen Base + Train Custom Heads)
+  # ---------------------------------------------------------
+  tuning_no_lora_weight_decay_0.1:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/tuning_no_lora_weight_decay_0.1"
+    log_file: "./exp/siglip2_peft/ucf101/tuning_no_lora_weight_decay_0.1/session.log"
+    
+    unfreeze_backbone: false
+    prompt_type: "manual"
+    manual_prompt_template: "A video of a person performing {}"
+    cocoop_hidden_dim: 512
+    
+    lora_r: 0
+    lora_alpha: 0.0
+    lora_dropout: 0.0
+    lora_target_modules: []
+
+    # --- Tuning Parameters ---
+    batch_size: 32              # [CỐ ĐỊNH] Effective batch size = 32
+    accumulation_steps: 1       # [CỐ ĐỊNH] 32 * 1 = 32
+    lr_base: 0.0                # [CỐ ĐỊNH] Không dùng đến vì base đã đóng băng
+    
+    lr_head: 1.0e-3             # [TUNING] Thử nghiệm các giá trị: 5.0e-4, 1.0e-3, 3.0e-3
+    weight_decay: 0.1          # [TUNING] Thử nghiệm: 0.01, 0.05, 0.1
+    
+    # --- Coarse-to-Fine Phase 1 Settings ---
+    num_epochs: 10              # [TUNING PHASE 1] Giảm xuống 10 để lọc nhanh các cấu hình tồi
+    early_stopping_patience: 3  # [TUNING PHASE 1] Dừng sớm sau 3 epoch nếu loss không giảm
+
+  # ---------------------------------------------------------
+  # MODE 2: WITH LORA (Frozen Base + LoRA + Train Custom Heads)
+  # ---------------------------------------------------------
+
+  tuning_with_lora_weight_decay_0.05:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/tuning_with_lora_weight_decay_0.05"
+    log_file: "./exp/siglip2_peft/ucf101/tuning_with_lora_weight_decay_0.05/session.log"
+    
+    unfreeze_backbone: false
+    prompt_type: "manual"
+    manual_prompt_template: "A video of a person performing {}"
+    cocoop_hidden_dim: 512
+    
+    lora_r: 8                   # [CỐ ĐỊNH TẠM THỜI] Cố định LoRA dim để tập trung tune LR trước
+    lora_alpha: 16.0            # [CỐ ĐỊNH TẠM THỜI] 
+    lora_dropout: 0.05          # [CỐ ĐỊNH TẠM THỜI] 
+    lora_target_modules: ["q_proj", "v_proj"]
+
+    # --- Tuning Parameters ---
+    batch_size: 32              # [CỐ ĐỊNH] Tùy chỉnh theo VRAM (Ví dụ để 16)
+    accumulation_steps: 1       # [CỐ ĐỊNH] 16 * 2 = 32 effective batch size
+    
+    lr_base: 1.0e-4             # [TUNING] (Cho LoRA): Thử 1.0e-4, 3.0e-4, 5.0e-4
+    lr_head: 1.0e-3             # [TUNING] (Cho Custom Head): Thử 5.0e-4, 1.0e-3, 2.0e-3
+    weight_decay: 0.05          # [TUNING] Thử nghiệm: 0.01, 0.05, 0.1
+    
+    # --- Coarse-to-Fine Phase 1 Settings ---
+    num_epochs: 10              # [TUNING PHASE 1] Chạy nhanh 10 epoch
+    early_stopping_patience: 3  # [TUNING PHASE 1] Dừng sớm nhạy hơn
+
+  tuning_with_lora_weight_decay_0.1:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/tuning_with_lora_weight_decay_0.1"
+    log_file: "./exp/siglip2_peft/ucf101/tuning_with_lora_weight_decay_0.1/session.log"
+    
+    unfreeze_backbone: false
+    prompt_type: "manual"
+    manual_prompt_template: "A video of a person performing {}"
+    cocoop_hidden_dim: 512
+    
+    lora_r: 8                   # [CỐ ĐỊNH TẠM THỜI] Cố định LoRA dim để tập trung tune LR trước
+    lora_alpha: 16.0            # [CỐ ĐỊNH TẠM THỜI] 
+    lora_dropout: 0.05          # [CỐ ĐỊNH TẠM THỜI] 
+    lora_target_modules: ["q_proj", "v_proj"]
+
+    # --- Tuning Parameters ---
+    batch_size: 32              # [CỐ ĐỊNH] Tùy chỉnh theo VRAM (Ví dụ để 16)
+    accumulation_steps: 1       # [CỐ ĐỊNH] 16 * 2 = 32 effective batch size
+    
+    lr_base: 1.0e-4             # [TUNING] (Cho LoRA): Thử 1.0e-4, 3.0e-4, 5.0e-4
+    lr_head: 1.0e-3             # [TUNING] (Cho Custom Head): Thử 5.0e-4, 1.0e-3, 2.0e-3
+    weight_decay: 0.1          # [TUNING] Thử nghiệm: 0.01, 0.05, 0.1
+    
+    # --- Coarse-to-Fine Phase 1 Settings ---
+    num_epochs: 10              # [TUNING PHASE 1] Chạy nhanh 10 epoch
+    early_stopping_patience: 3  # [TUNING PHASE 1] Dừng sớm nhạy hơn
+
+  # ---------------------------------------------------------
+  # MODE 3: FULL FINE-TUNING (Unfrozen Base + Train Custom Heads)
+  # ---------------------------------------------------------
+  tuning_fft_lr_base_1.0e-6:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/tuning_fft_lr_base_1.0e-6"
+    log_file: "./exp/siglip2_peft/ucf101/tuning_fft_lr_base_1.0e-6/session.log"
+    
+    unfreeze_backbone: true     # [CỐ ĐỊNH] Mở khóa SigLIP
+    prompt_type: "manual"
+    manual_prompt_template: "A video of a person performing {}"
+    cocoop_hidden_dim: 512
+    
+    lora_r: 0
+    lora_alpha: 0.0
+    lora_dropout: 0.0
+    lora_target_modules: []
+
+    # --- Tuning Parameters ---
+    batch_size: 8               # [CỐ ĐỊNH] Giữ ở mức 8 vì tốn VRAM nhất
+    accumulation_steps: 4       # [CỐ ĐỊNH] 8 * 4 = 32 effective batch size
+    
+    lr_base: 1.0e-6             # [TUNING] (Backbone cực nhạy cảm): Thử 1.0e-6, 1.0e-5, 2.0e-5, 5.0e-5
+    lr_head: 1.0e-4             # [TUNING] (Custom Head): Thử 1.0e-4, 3.0e-4, 5.0e-4
+    weight_decay: 0.01          # [TUNING] Thử nghiệm: 0.01, 0.05, 0.1
+    
+    # --- Coarse-to-Fine Phase 1 Settings ---
+    num_epochs: 10              # [TUNING PHASE 1] 
+    early_stopping_patience: 3  # [TUNING PHASE 1]
+
+  tuning_fft_lr_base_1.0e-5:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/tuning_fft_lr_base_1.0e-5"
+    log_file: "./exp/siglip2_peft/ucf101/tuning_fft_lr_base_1.0e-5/session.log"
+    
+    unfreeze_backbone: true     # [CỐ ĐỊNH] Mở khóa SigLIP
+    prompt_type: "manual"
+    manual_prompt_template: "A video of a person performing {}"
+    cocoop_hidden_dim: 512
+    
+    lora_r: 0
+    lora_alpha: 0.0
+    lora_dropout: 0.0
+    lora_target_modules: []
+
+    # --- Tuning Parameters ---
+    batch_size: 8               # [CỐ ĐỊNH] Giữ ở mức 8 vì tốn VRAM nhất
+    accumulation_steps: 4       # [CỐ ĐỊNH] 8 * 4 = 32 effective batch size
+    
+    lr_base: 1.0e-5             # [TUNING] (Backbone cực nhạy cảm): Thử 1.0e-6, 1.0e-5, 2.0e-5, 5.0e-5
+    lr_head: 1.0e-4             # [TUNING] (Custom Head): Thử 1.0e-4, 3.0e-4, 5.0e-4
+    weight_decay: 0.01          # [TUNING] Thử nghiệm: 0.01, 0.05, 0.1
+    
+    # --- Coarse-to-Fine Phase 1 Settings ---
+    num_epochs: 10              # [TUNING PHASE 1] 
+    early_stopping_patience: 3  # [TUNING PHASE 1]
+
+  tuning_fft_lr_base_2.0e-5:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/tuning_fft_lr_base_1.0e-5"
+    log_file: "./exp/siglip2_peft/ucf101/tuning_fft_lr_base_1.0e-5/session.log"
+    
+    unfreeze_backbone: true     # [CỐ ĐỊNH] Mở khóa SigLIP
+    prompt_type: "manual"
+    manual_prompt_template: "A video of a person performing {}"
+    cocoop_hidden_dim: 512
+    
+    lora_r: 0
+    lora_alpha: 0.0
+    lora_dropout: 0.0
+    lora_target_modules: []
+
+    # --- Tuning Parameters ---
+    batch_size: 8               # [CỐ ĐỊNH] Giữ ở mức 8 vì tốn VRAM nhất
+    accumulation_steps: 4       # [CỐ ĐỊNH] 8 * 4 = 32 effective batch size
+    
+    lr_base: 2.0e-5             # [TUNING] (Backbone cực nhạy cảm): Thử 1.0e-6, 1.0e-5, 2.0e-5, 5.0e-5
+    lr_head: 1.0e-4             # [TUNING] (Custom Head): Thử 1.0e-4, 3.0e-4, 5.0e-4
+    weight_decay: 0.01          # [TUNING] Thử nghiệm: 0.01, 0.05, 0.1
+    
+    # --- Coarse-to-Fine Phase 1 Settings ---
+    num_epochs: 10              # [TUNING PHASE 1] 
+    early_stopping_patience: 3  # [TUNING PHASE 1]
+
+  tuning_fft_lr_base_5.0e-5:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/tuning_fft_lr_base_5.0e-5"
+    log_file: "./exp/siglip2_peft/ucf101/tuning_fft_lr_base_5.0e-5/session.log"
+    
+    unfreeze_backbone: true     # [CỐ ĐỊNH] Mở khóa SigLIP
+    prompt_type: "manual"
+    manual_prompt_template: "A video of a person performing {}"
+    cocoop_hidden_dim: 512
+    
+    lora_r: 0
+    lora_alpha: 0.0
+    lora_dropout: 0.0
+    lora_target_modules: []
+
+    # --- Tuning Parameters ---
+    batch_size: 8               # [CỐ ĐỊNH] Giữ ở mức 8 vì tốn VRAM nhất
+    accumulation_steps: 4       # [CỐ ĐỊNH] 8 * 4 = 32 effective batch size
+    
+    lr_base: 5.0e-5             # [TUNING] (Backbone cực nhạy cảm): Thử 1.0e-6, 1.0e-5, 2.0e-5, 5.0e-5
+    lr_head: 1.0e-4             # [TUNING] (Custom Head): Thử 1.0e-4, 3.0e-4, 5.0e-4
+    weight_decay: 0.01          # [TUNING] Thử nghiệm: 0.01, 0.05, 0.1
+    
+    # --- Coarse-to-Fine Phase 1 Settings ---
+    num_epochs: 10              # [TUNING PHASE 1] 
+    early_stopping_patience: 3  # [TUNING PHASE 1]
