@@ -141,7 +141,7 @@ class Siglip2ActionModel(nn.Module):
 
         self.temporal_module = HybridTemporalModule(dim=embedding_dim)
         
-        self.gamma = nn.Parameter(torch.ones(1))
+        self.gamma = nn.Parameter(torch.ones(1) * 0.1)
         
         if self.prompt_type == "cocoop":
             self.meta_net = MetaNet(dim=embedding_dim, hidden_dim=cocoop_hidden_dim, num_prompt_tokens=4)
