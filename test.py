@@ -280,6 +280,9 @@ if __name__ == "__main__":
     else:
         target_classes = raw_yaml.get("zero_shot_splits", {}).get("seen_class_names", None)
     
+
+    dataset_setting = config.get("setting", "fully_supervised")
+
     # Build dataset kwargs dynamically
     dataset_kwargs = {
         "base_dir": config["base_dir"],
@@ -288,14 +291,25 @@ if __name__ == "__main__":
         "num_frames": config["num_frames"],
         "mode": "test",
         "prompt_template": config.get("manual_prompt_template", "A video of a person performing {}"),
-        "allowed_classes": target_classes
+        "allowed_classes": target_classes,
+        "setting": dataset_setting # [NEW]
     }
 
     # Pass split parameter only if supported
     if dataset_name not in ["ssv2", "something-something-v2"]:
         dataset_kwargs["split"] = config["split"]
 
-    val_dataset = ActionDataset(**dataset_kwargs)
+    # [NEW LOGIC] Khởi tạo dataset dựa trên setting mode
+    if dataset_setting == 'base2novel':
+        splits_dir = config.get("splits_dir", config["annotation_dir"])
+        # Nếu đang Zero Shot test thì đọc novel, nếu đang Val Base thì đọc base
+        split_target_file = config.get("val_novel", "novel_val.txt") if is_zs_mode else config.get("val_base", "base_val.txt")
+        file_path = os.path.join(splits_dir, split_target_file)
+        
+        val_dataset = ActionDataset(split_file_path=file_path, **dataset_kwargs)
+    else:
+        # Code gốc của bạn (Fully Supervised)
+        val_dataset = ActionDataset(**dataset_kwargs)
     
     g_val = torch.Generator()
     g_val.manual_seed(config["seed"])

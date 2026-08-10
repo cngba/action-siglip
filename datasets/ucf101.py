@@ -25,10 +25,12 @@ class UCF101VideoDataset(Dataset):
         split: int = 1,  
         mode: str = 'train',
         num_frames: int = 8,
-        prompt_template: str = "A video of a person performing {}", # Thêm tham số này
-        allowed_classes=None  # BỔ SUNG THAM SỐ NÀY
+        prompt_template: str = "A video of a person performing {}", 
+        allowed_classes=None,
+        setting: str = 'fully_supervised', # [NEW] Thêm setting
+        split_file_path: str = None        # [NEW] Thêm đường dẫn file txt
     ):
-        self.prompt_template = prompt_template # Lưu lại template
+        self.prompt_template = prompt_template 
         self.allowed_classes = allowed_classes
         self.base_dir = base_dir
         self.annotation_dir = annotation_dir
@@ -36,6 +38,8 @@ class UCF101VideoDataset(Dataset):
         self.mode = mode if mode in ['train', 'val', 'test'] else 'train'
         self.num_frames = num_frames
         self.split = split
+        self.setting = setting             # [NEW]
+        self.split_file_path = split_file_path # [NEW]
         
         # Step 1: Build the class-name to label-id mapping used by the dataset.
         self.label_to_id, self.id_to_label = self._build_class_mappings()
@@ -46,23 +50,22 @@ class UCF101VideoDataset(Dataset):
         # Step 2: Load all video paths for the requested split and mode.
         self.video_list = self._load_split()
         
-        # Step 3: Read normalization statistics from the processor so frames are standardized consistently.
+        # (Step 3 & 4: Khởi tạo transforms giữ nguyên như code của bạn)
         image_processor = getattr(processor, "image_processor", processor)
         mean = getattr(image_processor, "image_mean", [0.5, 0.5, 0.5])
         std = getattr(image_processor, "image_std", [0.5, 0.5, 0.5])
 
-        # Step 4: Create separate augmentation pipelines for training and validation/inference.
         self.train_transforms = v2.Compose([
             v2.RandomResizedCrop(size=(224, 224), scale=(0.8, 1.0), antialias=True),
             v2.RandomHorizontalFlip(p=0.5),
-            v2.ToDtype(torch.float32, scale=True), # Scales uint8 [0, 255] to float32 [0.0, 1.0]
+            v2.ToDtype(torch.float32, scale=True), 
             v2.Normalize(mean=mean, std=std),
         ])
         
         self.val_transforms = v2.Compose([
             v2.Resize(256, antialias=True),
             v2.CenterCrop((224, 224)),
-            v2.ToDtype(torch.float32, scale=True), # Scales uint8 [0, 255] to float32 [0.0, 1.0]
+            v2.ToDtype(torch.float32, scale=True), 
             v2.Normalize(mean=mean, std=std),
         ])
 
@@ -87,6 +90,35 @@ class UCF101VideoDataset(Dataset):
 
 
     def _load_split(self):
+        # =========================================================
+        # [NEW LOGIC] - CHẾ ĐỘ BASE-TO-NOVEL (ĐỌC FILE TC-CLIP)
+        # =========================================================
+        if self.setting == 'base2novel':
+            if not self.split_file_path or not os.path.exists(self.split_file_path):
+                raise FileNotFoundError(f"Missing base2novel split file at: {self.split_file_path}")
+                
+            video_list = []
+            with open(self.split_file_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line: continue
+                    parts = line.split()
+                    vid_path = parts[0]
+                    # Parse class name từ đường dẫn để map id cho chuẩn
+                    class_name = vid_path.split('/')[0] 
+                    
+                    if class_name in self.label_to_id:
+                        if self.allowed_classes is not None and len(self.allowed_classes) > 0:
+                            if class_name not in self.allowed_classes:
+                                continue
+                        label_id = self.label_to_id[class_name]
+                        video_list.append((vid_path, label_id))
+            logger.info(f"Loaded {len(video_list)} videos for setting '{self.setting}' from {self.split_file_path}.")
+            return video_list
+
+        # =========================================================
+        # [OLD LOGIC] - CHẾ ĐỘ FULLY SUPERVISED CŨ CỦA BẠN
+        # =========================================================
         # 1. Zero-Shot evaluation / Pure Testing reads directly from testlist0X.txt
         if self.mode == 'test':
             list_file = os.path.join(self.annotation_dir, f'testlist0{self.split}.txt')
@@ -111,7 +143,7 @@ class UCF101VideoDataset(Dataset):
             logger.info(f"Loaded {len(video_list)} videos for TEST mode from split {self.split}.")
             return video_list
 
-        # 2. Train and Val mode: Load from trainlist0X.txt using GROUP-BASED SPLITTING (Prevent Leakage)
+        # 2. Train and Val mode: Load from trainlist0X.txt using GROUP-BASED SPLITTING
         list_file = os.path.join(self.annotation_dir, f'trainlist0{self.split}.txt')
         if not os.path.exists(list_file):
             raise FileNotFoundError(f"Missing split file at: {list_file}")
@@ -134,13 +166,11 @@ class UCF101VideoDataset(Dataset):
 
                     label_id = self.label_to_id[class_name]
                     
-                    # Extract Group Identifier (e.g., 'v_ApplyEyeMakeup_g01_c01.avi' -> 'ApplyEyeMakeup_g01')
                     filename = os.path.basename(vid_path)
                     group_id = "_".join(filename.split("_")[:3])
                     
                     groups_dict[group_id].append((vid_path, label_id))
 
-        # Sort keys for absolute reproducibility across environments
         sorted_groups = sorted(list(groups_dict.keys()))
         rng = random.Random(42)
         rng.shuffle(sorted_groups)

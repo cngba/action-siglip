@@ -240,6 +240,9 @@ def main():
     seen_classes = raw_yaml.get("zero_shot_splits", {}).get("seen_class_names", None)
 
     logger.info("Setting up Training Split and Data Loaders pipeline configurations...")
+
+    # Common dataset arguments
+    dataset_setting = config.get("setting", "fully_supervised")
     
     # Common dataset arguments
     dataset_kwargs = {
@@ -247,23 +250,27 @@ def main():
         "annotation_dir": config["annotation_dir"],
         "processor": processor,
         "num_frames": config["num_frames"],
-        "allowed_classes": seen_classes
+        "allowed_classes": seen_classes,
+        "setting": dataset_setting # [NEW]
     }
 
     # Pass 'split' parameter only for datasets that support/require it (e.g., UCF101, HMDB51)
     if dataset_name not in ["ssv2", "something-something-v2"]:
         dataset_kwargs["split"] = config["split"]
 
-    train_dataset = ActionDataset(
-        mode='train',
-        **dataset_kwargs
-    )
-    
-    val_dataset = ActionDataset(
-        mode='val',
-        **dataset_kwargs
-    )
-
+    # [NEW LOGIC] Khởi tạo dataset dựa trên setting mode
+    if dataset_setting == 'base2novel':
+        splits_dir = config.get("splits_dir", config["annotation_dir"])
+        train_file = os.path.join(splits_dir, config.get("train_base", "base_train.txt"))
+        val_file = os.path.join(splits_dir, config.get("val_base", "base_val.txt"))
+        
+        train_dataset = ActionDataset(mode='train', split_file_path=train_file, **dataset_kwargs)
+        val_dataset = ActionDataset(mode='val', split_file_path=val_file, **dataset_kwargs)
+    else:
+        # Code gốc của bạn (Fully Supervised)
+        train_dataset = ActionDataset(mode='train', **dataset_kwargs)
+        val_dataset = ActionDataset(mode='val', **dataset_kwargs)
+        
     g_train = torch.Generator().manual_seed(config["seed"])
     g_val = torch.Generator().manual_seed(config["seed"])
 

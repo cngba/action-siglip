@@ -1,0 +1,162 @@
+# ==============================================================================
+# Global Configuration 
+# ==============================================================================
+model_name: "google/siglip2-base-patch16-224"
+seed: 1024
+
+# ==============================================================================
+# 1. CẤU HÌNH DỮ LIỆU (VISION BRANCH)
+# ==============================================================================
+data:
+  dataset: "ucf101"
+  num_classes: 101
+  num_segments: 8
+  base_dir: "/root/data/UCF-101"             # Thư mục chứa video gốc
+  annotation_dir: "/root/data/ucfTrainTestlist" 
+  workers: 8
+  
+  # --- THÊM CONFIG CHO CHẾ ĐỘ BASE-TO-NOVEL TẠI ĐÂY ---
+  setting: "base2novel"                      # Chuyển mode thành base2novel
+  splits_dir: "/root/data/tc_clip_splits"    # Thư mục chứa 3 file .txt của tc-clip
+  train_base: "base_train.txt"               # Dùng cho train.py
+  val_base: "base_val.txt"                   # Dùng cho validation trong train.py
+  val_novel: "novel_val.txt"                 # Dùng cho test.py (Zero-shot)
+
+# ==============================================================================
+# 2. TỪ VỰNG CHO ZERO-SHOT (TEXT BRANCH)
+# Chú ý: Đây là phần BẮT BUỘC để SigLIP sinh Text Embeddings chính xác
+# ==============================================================================
+zero_shot_splits:
+  seen_class_names:
+    - "Typing"
+    - "BasketballDunk"
+    - "BrushingTeeth"
+    - "Skiing"
+    - "WallPushups"
+    - "Biking"
+    - "SoccerPenalty"
+    - "BabyCrawling"
+    - "BoxingSpeedBag"
+    - "Haircut"
+    - "Nunchucks"
+    - "Shotput"
+    - "Basketball"
+    - "CliffDiving"
+    - "FrontCrawl"
+    - "GolfSwing"
+    - "HandstandPushups"
+    - "ApplyEyeMakeup"
+    - "Rowing"
+    - "TableTennisShot"
+    - "CricketBowling"
+    - "RockClimbingIndoor"
+    - "Archery"
+    - "Diving"
+    - "HammerThrow"
+    - "Kayaking"
+    - "HeadMassage"
+    - "JumpRope"
+    - "BaseballPitch"
+    - "Hammering"
+    - "PlayingFlute"
+    - "WritingOnBoard"
+    - "SoccerJuggling"
+    - "PoleVault"
+    - "Billiards"
+    - "PlayingDaf"
+    - "BandMarching"
+    - "BenchPress"
+    - "Bowling"
+    - "IceDancing"
+    - "PlayingSitar"
+    - "BoxingPunchingBag"
+    - "HorseRiding"
+    - "PlayingDhol"
+    - "Drumming"
+    - "PlayingGuitar"
+    - "TennisSwing"
+    - "CricketShot"
+    - "ShavingBeard"
+    - "PlayingCello"
+    - "Punch"
+
+  unseen_class_names:
+    - "PlayingViolin"
+    - "PullUps"
+    - "PushUps"
+    - "Skijet"
+    - "TaiChi"
+    - "BreastStroke"
+    - "BlowingCandles"
+    - "MoppingFloor"
+    - "UnevenBars"
+    - "BalanceBeam"
+    - "CuttingInKitchen"
+    - "Fencing"
+    - "HandstandWalking"
+    - "ParallelBars"
+    - "PlayingPiano"
+    - "CleanAndJerk"
+    - "SkyDiving"
+    - "PizzaTossing"
+    - "PlayingTabla"
+    - "StillRings"
+    - "JugglingBalls"
+    - "VolleyballSpiking"
+    - "ApplyLipstick"
+    - "BodyWeightSquats"
+    - "SumoWrestling"
+    - "Rafting"
+    - "RopeClimbing"
+    - "FieldHockeyPenalty"
+    - "HighJump"
+    - "JavelinThrow"
+    - "JumpingJack"
+    - "TrampolineJumping"
+    - "WalkingWithDog"
+    - "PommelHorse"
+    - "SkateBoarding"
+    - "FloorGymnastics"
+    - "FrisbeeCatch"
+    - "HorseRace"
+    - "Knitting"
+    - "Swing"
+    - "Lunges"
+    - "SalsaSpin"
+    - "HulaHoop"
+    - "Mixing"
+    - "LongJump"
+    - "MilitaryParade"
+    - "ThrowDiscus"
+    - "YoYo"
+    - "BlowDryHair"
+    - "Surfing"
+
+# ==============================================================================
+# 3. CÁC MODE HUẤN LUYỆN (Giữ nguyên như code của bạn)
+# ==============================================================================
+modes:
+  baseline_with_lora:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/baseline_with_lora"
+    log_file: "./exp/siglip2_peft/ucf101/baseline_with_lora/session.log"
+    
+    unfreeze_backbone: false
+    prompt_type: "manual"
+    manual_prompt_template: "A video of a person performing {}"
+    cocoop_hidden_dim: 512
+    
+    lora_r: 16                   
+    lora_alpha: 16.0            
+    lora_dropout: 0.05          
+    lora_target_modules: ["q_proj", "v_proj"]
+
+    batch_size: 16              
+    accumulation_steps: 2       
+    
+    lr_base: 1.0e-4             
+    lr_head: 1.0e-3             
+    weight_decay: 0.05          
+    
+    num_epochs: 30              
+    warmup_epochs: 5            
+    early_stopping_patience: 5  
