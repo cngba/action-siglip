@@ -291,21 +291,26 @@ if __name__ == "__main__":
         "num_frames": config["num_frames"],
         "mode": "test",
         "prompt_template": config.get("manual_prompt_template", "A video of a person performing {}"),
-        "allowed_classes": target_classes,
-        "setting": dataset_setting # [NEW]
+        "allowed_classes": target_classes
     }
 
     # Pass split parameter only if supported
     if dataset_name not in ["ssv2", "something-something-v2"]:
         dataset_kwargs["split"] = config["split"]
 
-    # [NEW LOGIC] Khởi tạo dataset dựa trên setting mode
+    # --- KHỞI TẠO DATASET ---
     if dataset_setting == 'base2novel':
         splits_dir = config.get("splits_dir", config["annotation_dir"])
-        # Nếu đang Zero Shot test thì đọc novel, nếu đang Val Base thì đọc base
         split_target_file = config.get("val_novel", "novel_val.txt") if is_zs_mode else config.get("val_base", "base_val.txt")
         file_path = os.path.join(splits_dir, split_target_file)
-        # action-siglip/test.py
+        val_dataset = ActionDataset(setting='base2novel', split_file_path=file_path, **dataset_kwargs)
+        
+    elif dataset_setting == 'few_shot':
+        # Trong Few-shot, quá trình Test luôn thực hiện trên tập Test chuẩn
+        val_dataset = ActionDataset(setting='fully_supervised', **dataset_kwargs)
+        
+    else:
+        val_dataset = ActionDataset(setting='fully_supervised', **dataset_kwargs)
 # Author: Cong
 
 import os
@@ -546,7 +551,12 @@ if __name__ == "__main__":
         "annotation_dir": raw_yaml["data"]["annotation_dir"],
         "split": raw_yaml["data"].get("split", 1),
         "num_frames": raw_yaml["data"]["num_segments"],
-        "num_workers": raw_yaml["data"]["workers"]
+        "num_workers": raw_yaml["data"]["workers"],
+        
+        "setting": raw_yaml["data"].get("setting", "fully_supervised"),
+        "splits_dir": raw_yaml["data"].get("splits_dir", ""),
+        "val_base": raw_yaml["data"].get("val_base", "base_val.txt"),
+        "val_novel": raw_yaml["data"].get("val_novel", "novel_val.txt"),
     }
     
     mode_specific_config = raw_yaml["modes"][args.mode]
@@ -599,24 +609,28 @@ if __name__ == "__main__":
         "mode": "test",
         "prompt_template": config.get("manual_prompt_template", "A video of a person performing {}"),
         "allowed_classes": target_classes,
-        "setting": dataset_setting # [NEW]
     }
 
     # Pass split parameter only if supported
     if dataset_name not in ["ssv2", "something-something-v2"]:
         dataset_kwargs["split"] = config["split"]
 
-    # [NEW LOGIC] Khởi tạo dataset dựa trên setting mode
+    # --- KHỞI TẠO DATASET DỰA TRÊN SETTING ---
     if dataset_setting == 'base2novel':
         splits_dir = config.get("splits_dir", config["annotation_dir"])
-        # Nếu đang Zero Shot test thì đọc novel, nếu đang Val Base thì đọc base
         split_target_file = config.get("val_novel", "novel_val.txt") if is_zs_mode else config.get("val_base", "base_val.txt")
         file_path = os.path.join(splits_dir, split_target_file)
         
-        val_dataset = ActionDataset(split_file_path=file_path, **dataset_kwargs)
+        val_dataset = ActionDataset(setting='base2novel', split_file_path=file_path, **dataset_kwargs)
+        
+    elif dataset_setting == 'few_shot':
+        # [NEW]: Lúc test Few-shot, ta không đọc val1.txt nữa mà nhảy thẳng về Fully Supervised
+        # để code cũ tự động đọc `testlist01.txt` (nếu split: 1)
+        val_dataset = ActionDataset(setting='fully_supervised', **dataset_kwargs)
+        
     else:
         # Code gốc của bạn (Fully Supervised)
-        val_dataset = ActionDataset(**dataset_kwargs)
+        val_dataset = ActionDataset(setting='fully_supervised', **dataset_kwargs)
     
     g_val = torch.Generator()
     g_val.manual_seed(config["seed"])
@@ -717,109 +731,109 @@ if __name__ == "__main__":
     
     if wandb:
         wandb.finish()
-        val_dataset = ActionDataset(split_file_path=file_path, **dataset_kwargs)
-    else:
-        # Code gốc của bạn (Fully Supervised)
-        val_dataset = ActionDataset(**dataset_kwargs)
+    #     val_dataset = ActionDataset(split_file_path=file_path, **dataset_kwargs)
+    # else:
+    #     # Code gốc của bạn (Fully Supervised)
+    #     val_dataset = ActionDataset(**dataset_kwargs)
     
-    g_val = torch.Generator()
-    g_val.manual_seed(config["seed"])
+    # g_val = torch.Generator()
+    # g_val.manual_seed(config["seed"])
 
-    def worker_init_fn(worker_id):
-        worker_seed = torch.initial_seed() % 2**32
-        np.random.seed(worker_seed)
-        random.seed(worker_seed)
+    # def worker_init_fn(worker_id):
+    #     worker_seed = torch.initial_seed() % 2**32
+    #     np.random.seed(worker_seed)
+    #     random.seed(worker_seed)
 
-    if hasattr(os, 'sched_getaffinity'):
-        allocated_cpus = len(os.sched_getaffinity(0)) #type:ignore
-        num_workers = min(config["num_workers"], allocated_cpus)
-    else:
-        num_workers = min(config["num_workers"], os.cpu_count()) if os.name != 'nt' else 0
+    # if hasattr(os, 'sched_getaffinity'):
+    #     allocated_cpus = len(os.sched_getaffinity(0)) #type:ignore
+    #     num_workers = min(config["num_workers"], allocated_cpus)
+    # else:
+    #     num_workers = min(config["num_workers"], os.cpu_count()) if os.name != 'nt' else 0
 
-    val_loader = DataLoader(
-        val_dataset, 
-        batch_size=config["batch_size"], 
-        shuffle=False, 
-        num_workers=num_workers, 
-        pin_memory=torch.cuda.is_available(),
-        worker_init_fn=worker_init_fn,
-        generator=g_val
-    )
+    # val_loader = DataLoader(
+    #     val_dataset, 
+    #     batch_size=config["batch_size"], 
+    #     shuffle=False, 
+    #     num_workers=num_workers, 
+    #     pin_memory=torch.cuda.is_available(),
+    #     worker_init_fn=worker_init_fn,
+    #     generator=g_val
+    # )
 
-    class_list = val_dataset.unique_labels
+    # class_list = val_dataset.unique_labels
     
-    # Construct PEFT LoraConfig matching model/train setup
-    lora_config = LoraConfig(
-        r=config["lora_r"],
-        lora_alpha=config["lora_alpha"],
-        lora_dropout=config["lora_dropout"],
-        target_modules=config["lora_target_modules"],
-        bias="none",
-        task_type="FEATURE_EXTRACTION"
-    )
+    # # Construct PEFT LoraConfig matching model/train setup
+    # lora_config = LoraConfig(
+    #     r=config["lora_r"],
+    #     lora_alpha=config["lora_alpha"],
+    #     lora_dropout=config["lora_dropout"],
+    #     target_modules=config["lora_target_modules"],
+    #     bias="none",
+    #     task_type="FEATURE_EXTRACTION"
+    # )
 
-    # Initialize model matching model.py signature
-    model = Siglip2ActionModel(
-        model_name=config["model_name"], 
-        class_names=class_list,
-        prompt_type=config["prompt_type"],
-        manual_prompt_template=config["manual_prompt_template"],
-        cocoop_hidden_dim=config["cocoop_hidden_dim"],
-        lora_config=lora_config,
-        unfreeze_backbone=config.get("unfreeze_backbone", False)
-    ).to(device)
+    # # Initialize model matching model.py signature
+    # model = Siglip2ActionModel(
+    #     model_name=config["model_name"], 
+    #     class_names=class_list,
+    #     prompt_type=config["prompt_type"],
+    #     manual_prompt_template=config["manual_prompt_template"],
+    #     cocoop_hidden_dim=config["cocoop_hidden_dim"],
+    #     lora_config=lora_config,
+    #     unfreeze_backbone=config.get("unfreeze_backbone", False)
+    # ).to(device)
 
-    current_epoch = 0
-    unseen_classes = None
+    # current_epoch = 0
+    # unseen_classes = None
 
-    if is_zs_mode:
-        logging.info("Executing pure Zero-Shot baseline performance evaluation over unseen action domains.")
-        unseen_classes = config.get("unseen_class_names", class_list)
+    # if is_zs_mode:
+    #     logging.info("Executing pure Zero-Shot baseline performance evaluation over unseen action domains.")
+    #     unseen_classes = config.get("unseen_class_names", class_list)
     
-    checkpoint_target = args.weights if args.weights else os.path.join(config["checkpoint_dir"], "best_model.pt")
-    if checkpoint_target and os.path.isfile(checkpoint_target):
-        logging.info(f"Loading fine-tuned checkpoint weights directly from: {checkpoint_target}")
-        checkpoint = torch.load(checkpoint_target, map_location=device, weights_only=False)
+    # checkpoint_target = args.weights if args.weights else os.path.join(config["checkpoint_dir"], "best_model.pt")
+    # if checkpoint_target and os.path.isfile(checkpoint_target):
+    #     logging.info(f"Loading fine-tuned checkpoint weights directly from: {checkpoint_target}")
+    #     checkpoint = torch.load(checkpoint_target, map_location=device, weights_only=False)
         
-        state_dict = checkpoint['model_state_dict'] if 'model_state_dict' in checkpoint else checkpoint
+    #     state_dict = checkpoint['model_state_dict'] if 'model_state_dict' in checkpoint else checkpoint
         
-        clean_state_dict = {}
-        for k, v in state_dict.items():
-            name = k.replace('module.', '')
+    #     clean_state_dict = {}
+    #     for k, v in state_dict.items():
+    #         name = k.replace('module.', '')
             
-            if name.startswith('temporal_') and not name.startswith('temporal_module.'):
-                name = name.replace('temporal_', 'temporal_module.')
+    #         if name.startswith('temporal_') and not name.startswith('temporal_module.'):
+    #             name = name.replace('temporal_', 'temporal_module.')
                 
-            clean_state_dict[name] = v
+    #         clean_state_dict[name] = v
         
-        model.load_state_dict(clean_state_dict, strict=False)
-        current_epoch = checkpoint.get('epoch', 0)
-    else:
-        logging.warning(f"No checkpoint matched at destination: '{checkpoint_target}'. "
-                        f"Evaluating vanilla pre-trained weights instead.")
+    #     model.load_state_dict(clean_state_dict, strict=False)
+    #     current_epoch = checkpoint.get('epoch', 0)
+    # else:
+    #     logging.warning(f"No checkpoint matched at destination: '{checkpoint_target}'. "
+    #                     f"Evaluating vanilla pre-trained weights instead.")
 
-    # Multi-GPU support
-    if torch.cuda.device_count() > 1:
-        logging.info(f"Multi-GPU detected! Wrapping model in DataParallel for faster evaluation.")
-        model = nn.DataParallel(model)
+    # # Multi-GPU support
+    # if torch.cuda.device_count() > 1:
+    #     logging.info(f"Multi-GPU detected! Wrapping model in DataParallel for faster evaluation.")
+    #     model = nn.DataParallel(model)
 
-    if wandb:
-        project_name = "action-siglip2-zeroshot" if is_zs_mode else "action-siglip2-peft-eval"
-        wandb.init(
-            project=project_name,
-            name=f"eval_{args.mode}_{config['num_frames']}f",
-            config=config
-        )
+    # if wandb:
+    #     project_name = "action-siglip2-zeroshot" if is_zs_mode else "action-siglip2-peft-eval"
+    #     wandb.init(
+    #         project=project_name,
+    #         name=f"eval_{args.mode}_{config['num_frames']}f",
+    #         config=config
+    #     )
 
-    validate(
-        epoch=current_epoch, 
-        dataloader=val_loader, 
-        model=model, 
-        device=device, 
-        unseen_class_names=unseen_classes, 
-        is_zero_shot=is_zs_mode,
-        config=config
-    )
+    # validate(
+    #     epoch=current_epoch, 
+    #     dataloader=val_loader, 
+    #     model=model, 
+    #     device=device, 
+    #     unseen_class_names=unseen_classes, 
+    #     is_zero_shot=is_zs_mode,
+    #     config=config
+    # )
     
-    if wandb:
-        wandb.finish()
+    # if wandb:
+    #     wandb.finish()

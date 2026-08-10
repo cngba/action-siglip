@@ -144,6 +144,8 @@ modes:
   baseline_no_lora:
     checkpoint_dir: "./exp/siglip2_peft/ucf101/baseline_no_lora"
     log_file: "./exp/siglip2_peft/ucf101/baseline_no_lora/session.log"
+
+    loss_type: "contrastive"
     
     unfreeze_backbone: false
     prompt_type: "manual"

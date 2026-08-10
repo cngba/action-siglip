@@ -93,9 +93,9 @@ class UCF101VideoDataset(Dataset):
         # =========================================================
         # [NEW LOGIC] - CHẾ ĐỘ BASE-TO-NOVEL (ĐỌC FILE TC-CLIP)
         # =========================================================
-        if self.setting == 'base2novel':
+        if self.setting in ['base2novel', 'few_shot']:
             if not self.split_file_path or not os.path.exists(self.split_file_path):
-                raise FileNotFoundError(f"Missing base2novel split file at: {self.split_file_path}")
+                raise FileNotFoundError(f"Missing split file at: {self.split_file_path}")
                 
             video_list = []
             with open(self.split_file_path, 'r', encoding='utf-8') as f:
@@ -103,9 +103,19 @@ class UCF101VideoDataset(Dataset):
                     line = line.strip()
                     if not line: continue
                     parts = line.split()
-                    vid_path = parts[0]
-                    # Parse class name từ đường dẫn để map id cho chuẩn
-                    class_name = vid_path.split('/')[0] 
+                    raw_path = parts[0]
+                    
+                    # 1. Trích xuất tên file nguyên gốc (VD: v_TaiChi_g01_c01.avi)
+                    filename = os.path.basename(raw_path.replace('\\', '/'))
+                    
+                    # 2. Bóc class_name từ tên file bằng dấu "_"
+                    if '_' in filename:
+                        class_name = filename.split('_')[1]
+                    else:
+                        class_name = raw_path.split('/')[0] 
+                    
+                    # 3. Lắp ráp lại đường dẫn chuẩn để VideoReader đọc được
+                    vid_path = f"{class_name}/{filename}"
                     
                     if class_name in self.label_to_id:
                         if self.allowed_classes is not None and len(self.allowed_classes) > 0:

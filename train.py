@@ -182,7 +182,18 @@ def main():
         "annotation_dir": raw_yaml["data"]["annotation_dir"],
         "split": raw_yaml["data"]["split"],
         "num_frames": raw_yaml["data"]["num_segments"],
-        "num_workers": raw_yaml["data"]["workers"]
+        "num_workers": raw_yaml["data"]["workers"],
+        
+        # Thêm các biến lấy từ nhánh yaml để load đường dẫn cho Few-shot và Base2Novel
+        "setting": raw_yaml["data"].get("setting", "fully_supervised"),
+        "splits_dir": raw_yaml["data"].get("splits_dir", ""),
+        "train_base": raw_yaml["data"].get("train_base", "base_train.txt"),
+        "val_base": raw_yaml["data"].get("val_base", "base_val.txt"),
+        "val_novel": raw_yaml["data"].get("val_novel", "novel_val.txt"),
+        
+        # [NEW] Thêm 2 biến này cho chế độ Few-shot
+        "train_few_shot": raw_yaml["data"].get("train_few_shot", "train1_few_shot_16.txt"),
+        "val_few_shot": raw_yaml["data"].get("val_few_shot", "val1.txt")
     }
     
     mode_specific_config = raw_yaml["modes"][args.mode]
@@ -250,8 +261,7 @@ def main():
         "annotation_dir": config["annotation_dir"],
         "processor": processor,
         "num_frames": config["num_frames"],
-        "allowed_classes": seen_classes,
-        "setting": dataset_setting # [NEW]
+        "allowed_classes": seen_classes
     }
 
     # Pass 'split' parameter only for datasets that support/require it (e.g., UCF101, HMDB51)
@@ -264,12 +274,23 @@ def main():
         train_file = os.path.join(splits_dir, config.get("train_base", "base_train.txt"))
         val_file = os.path.join(splits_dir, config.get("val_base", "base_val.txt"))
         
-        train_dataset = ActionDataset(mode='train', split_file_path=train_file, **dataset_kwargs)
-        val_dataset = ActionDataset(mode='val', split_file_path=val_file, **dataset_kwargs)
+        train_dataset = ActionDataset(mode='train', setting='base2novel', split_file_path=train_file, **dataset_kwargs)
+        val_dataset = ActionDataset(mode='val', setting='base2novel', split_file_path=val_file, **dataset_kwargs)
+        
+    elif dataset_setting == 'few_shot':
+        splits_dir = config.get("splits_dir", config["annotation_dir"])
+        train_file = os.path.join(splits_dir, config.get("train_few_shot", "train_16_shot.txt"))
+        val_file = os.path.join(splits_dir, config.get("val_few_shot", "val1.txt"))
+        
+        # Train: Chỉ học trên file K-shot
+        train_dataset = ActionDataset(mode='train', setting='few_shot', split_file_path=train_file, **dataset_kwargs)
+        # Val: Trong Few-shot, ta đánh giá chéo trên toàn bộ tập Test chuẩn
+        val_dataset = ActionDataset(mode='test', setting='fully_supervised', **dataset_kwargs)
+        
     else:
         # Code gốc của bạn (Fully Supervised)
-        train_dataset = ActionDataset(mode='train', **dataset_kwargs)
-        val_dataset = ActionDataset(mode='val', **dataset_kwargs)
+        train_dataset = ActionDataset(mode='train', setting='fully_supervised', **dataset_kwargs)
+        val_dataset = ActionDataset(mode='val', setting='fully_supervised', **dataset_kwargs)
         
     g_train = torch.Generator().manual_seed(config["seed"])
     g_val = torch.Generator().manual_seed(config["seed"])

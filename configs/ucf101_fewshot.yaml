@@ -1,0 +1,70 @@
+# ==============================================================================
+# Global Configuration 
+# ==============================================================================
+model_name: "google/siglip2-base-patch16-224"
+seed: 1234
+
+# ==============================================================================
+# 1. CẤU HÌNH DỮ LIỆU (VISION BRANCH)
+# ==============================================================================
+data:
+  dataset: "ucf101"
+  num_classes: 101
+  num_segments: 8
+  base_dir: "/root/data/UCF-101"             # Thư mục chứa video gốc
+  annotation_dir: "/root/data/ucfTrainTestlist" 
+  split: 1
+  workers: 8
+  
+  # --- THÊM CONFIG CHO CHẾ ĐỘ BASE-TO-NOVEL TẠI ĐÂY ---
+  setting: "few_shot"                      # Chuyển mode thành base2novel
+  splits_dir: "/root/action-siglip/datasets_splits/ucf_splits"    # Thư mục chứa 3 file .txt của tc-clip
+  train_few_shot: "train1_few_shot_16.txt"
+  val_few_shot: "val1.txt"
+
+# ==============================================================================
+# 3. CÁC MODE HUẤN LUYỆN (Giữ nguyên như code của bạn)
+# ==============================================================================
+modes:
+
+  baseline_with_lora_16:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/baseline_with_lora_16"
+    log_file: "./exp/siglip2_peft/ucf101/baseline_with_lora_16/session.log"
+    
+    unfreeze_backbone: false
+    prompt_type: "manual"
+    manual_prompt_template: "a video of a person {}"
+    cocoop_hidden_dim: 512
+    
+    lora_r: 16                   
+    lora_alpha: 16.0            
+    lora_dropout: 0.05          
+    lora_target_modules: ["q_proj", "v_proj"]
+
+    batch_size: 32              
+    accumulation_steps: 2       
+    
+    lr_base: 5.0e-5             
+    lr_head: 1.0e-3             
+    weight_decay: 0.05          
+    
+    num_epochs: 50              
+    warmup_epochs: 5            
+    early_stopping_patience: 5   
+
+  test_few_shot_8:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/test_few_shot_8"
+    log_file: "./exp/siglip2_peft/ucf101/test_few_shot_8/session.log"
+
+    unfreeze_backbone: false
+    prompt_type: "manual"
+    manual_prompt_template: "a video of a person {}"
+    cocoop_hidden_dim: 512
+    
+    lora_r: 16                   
+    lora_alpha: 16.0            
+    lora_dropout: 0.05          
+    lora_target_modules: ["q_proj", "v_proj"]
+
+    batch_size: 32              
+    accumulation_steps: 2
