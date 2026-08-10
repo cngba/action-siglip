@@ -84,7 +84,6 @@ class Siglip2ActionModel(nn.Module):
         if class_names is None:
             raise ValueError("class_names list required.")
         self.class_names = class_names
-        self.prompt_type = prompt_type
         self.manual_prompt_template = manual_prompt_template
         
         self.model = SiglipModel.from_pretrained(model_name)
