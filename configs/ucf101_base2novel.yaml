@@ -2,7 +2,7 @@
 # Global Configuration 
 # ==============================================================================
 model_name: "google/siglip2-base-patch16-224"
-seed: 1024
+seed: 1234
 
 # ==============================================================================
 # 1. CẤU HÌNH DỮ LIỆU (VISION BRANCH)
@@ -13,11 +13,12 @@ data:
   num_segments: 8
   base_dir: "/root/data/UCF-101"             # Thư mục chứa video gốc
   annotation_dir: "/root/data/ucfTrainTestlist" 
+  split: 1
   workers: 8
   
   # --- THÊM CONFIG CHO CHẾ ĐỘ BASE-TO-NOVEL TẠI ĐÂY ---
   setting: "base2novel"                      # Chuyển mode thành base2novel
-  splits_dir: "/root/data/tc_clip_splits"    # Thư mục chứa 3 file .txt của tc-clip
+  splits_dir: "/root/action-siglip/datasets_splits/base2novel_splits/ucf_splits"    # Thư mục chứa 3 file .txt của tc-clip
   train_base: "base_train.txt"               # Dùng cho train.py
   val_base: "base_val.txt"                   # Dùng cho validation trong train.py
   val_novel: "novel_val.txt"                 # Dùng cho test.py (Zero-shot)
@@ -136,13 +137,42 @@ zero_shot_splits:
 # 3. CÁC MODE HUẤN LUYỆN (Giữ nguyên như code của bạn)
 # ==============================================================================
 modes:
+
+  # ---------------------------------------------------------
+  # BASELINE 1: NO LORA (Frozen Base + Train Custom Heads)
+  # ---------------------------------------------------------
+  baseline_no_lora:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/baseline_no_lora"
+    log_file: "./exp/siglip2_peft/ucf101/baseline_no_lora/session.log"
+    
+    unfreeze_backbone: false
+    prompt_type: "manual"
+    manual_prompt_template: "{}"
+    cocoop_hidden_dim: 512
+    
+    lora_r: 0
+    lora_alpha: 0.0
+    lora_dropout: 0.0
+    lora_target_modules: []
+
+    batch_size: 16              
+    accumulation_steps: 2       
+    
+    lr_base: 0.0                
+    lr_head: 1.0e-3             
+    weight_decay: 0.05          
+    
+    num_epochs: 12              
+    warmup_epochs: 2            # Sử dụng Linear Warmup trong 5 epochs đầu
+    early_stopping_patience: 3  
+
   baseline_with_lora:
     checkpoint_dir: "./exp/siglip2_peft/ucf101/baseline_with_lora"
     log_file: "./exp/siglip2_peft/ucf101/baseline_with_lora/session.log"
     
     unfreeze_backbone: false
     prompt_type: "manual"
-    manual_prompt_template: "A video of a person performing {}"
+    manual_prompt_template: "a video of a person {}"
     cocoop_hidden_dim: 512
     
     lora_r: 16                   
@@ -150,13 +180,47 @@ modes:
     lora_dropout: 0.05          
     lora_target_modules: ["q_proj", "v_proj"]
 
-    batch_size: 16              
-    accumulation_steps: 2       
+    batch_size: 32              
+    accumulation_steps: 1       
     
-    lr_base: 1.0e-4             
+    lr_base: 5.0e-5             
     lr_head: 1.0e-3             
     weight_decay: 0.05          
     
-    num_epochs: 30              
-    warmup_epochs: 5            
-    early_stopping_patience: 5  
+    num_epochs: 12              
+    warmup_epochs: 2            
+    early_stopping_patience: 3  
+
+  zero_shot_baseline_with_lora:
+    # Trỏ về cùng thư mục để nó tìm thấy file log và ma trận nhầm lẫn (confusion matrix)
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/baseline_with_lora" 
+    
+    # Giữ nguyên cấu trúc mạng như lúc train để load weight không bị lỗi
+    unfreeze_backbone: false
+    prompt_type: "manual"
+    manual_prompt_template: "a video of a person {}"
+    cocoop_hidden_dim: 512
+    
+    lora_r: 16                   
+    lora_alpha: 16.0            
+    lora_dropout: 0.05          
+    lora_target_modules: ["q_proj", "v_proj"]
+
+    batch_size: 32
+
+  zero_shot_baseline_no_lora:
+    # Trỏ về cùng thư mục để nó tìm thấy file log và ma trận nhầm lẫn (confusion matrix)
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/baseline_no_lora" 
+    
+    # Giữ nguyên cấu trúc mạng như lúc train để load weight không bị lỗi
+    unfreeze_backbone: false
+    prompt_type: "manual"
+    manual_prompt_template: "{}"
+    cocoop_hidden_dim: 512
+    
+    lora_r: 0
+    lora_alpha: 0.0
+    lora_dropout: 0.0
+    lora_target_modules: []
+
+    batch_size: 32              

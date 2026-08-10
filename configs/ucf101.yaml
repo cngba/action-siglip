@@ -78,7 +78,126 @@ modes:
   # BASELINE 3: FULL FINE-TUNING (Unfrozen Base + Train Custom Heads)
   # ---------------------------------------------------------
   baseline_fft:
+    checkpoint_dir: "./# ==============================================================================
+# Global Configuration for UCF-101 (Official Baseline Training)
+# ==============================================================================
+model_name: "google/siglip2-base-patch16-224"
+seed: 1024
+
+data:
+  dataset: "ucf101"
+  num_classes: 101
+  num_segments: 8
+  base_dir: "/root/data/UCF-101"
+  annotation_dir: "/root/data/ucfTrainTestlist"
+  split: 1                                  
+  workers: 8
+
+# ==============================================================================
+# Mode Matrices cho 3 Baseline Chính Thức
+# Mục tiêu: Effective Batch Size = 32, Có Linear Warmup 5 Epochs
+# ==============================================================================
+modes:
+  # ---------------------------------------------------------
+  # BASELINE 1: NO LORA (Frozen Base + Train Custom Heads)
+  # ---------------------------------------------------------
+  baseline_no_lora:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/baseline_no_lora"
+    log_file: "./exp/siglip2_peft/ucf101/baseline_no_lora/session.log"
+    
+    unfreeze_backbone: false
+    prompt_type: "manual"
+    manual_prompt_template: "A video of a person performing {}"
+    cocoop_hidden_dim: 512
+    
+    lora_r: 0
+    lora_alpha: 0.0
+    lora_dropout: 0.0
+    lora_target_modules: []
+
+    batch_size: 16              
+    accumulation_steps: 2       
+    
+    lr_base: 0.0                
+    lr_head: 1.0e-3             
+    weight_decay: 0.05          
+    
+    num_epochs: 30              
+    warmup_epochs: 5            # Sử dụng Linear Warmup trong 5 epochs đầu
+    early_stopping_patience: 5  
+
+  # ---------------------------------------------------------
+  # BASELINE 2: WITH LORA (Frozen Base + LoRA + Train Custom Heads)
+  # ---------------------------------------------------------
+  baseline_with_lora:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/baseline_with_lora"
+    log_file: "./exp/siglip2_peft/ucf101/baseline_with_lora/session.log"
+    
+    unfreeze_backbone: false
+    prompt_type: "manual"
+    manual_prompt_template: "A video of a person performing {}"
+    cocoop_hidden_dim: 512
+    
+    lora_r: 16                   
+    lora_alpha: 16.0            
+    lora_dropout: 0.05          
+    lora_target_modules: ["q_proj", "v_proj"]
+
+    batch_size: 16              
+    accumulation_steps: 2       # 16 * 2 = 32 effective batch size
+    
+    lr_base: 1.0e-4             
+    lr_head: 1.0e-3             
+    weight_decay: 0.05          
+    
+    num_epochs: 30              
+    warmup_epochs: 5            # Sử dụng Linear Warmup trong 5 epochs đầu
+    early_stopping_patience: 5  
+
+  # ---------------------------------------------------------
+  # BASELINE 3: FULL FINE-TUNING (Unfrozen Base + Train Custom Heads)
+  # ---------------------------------------------------------
+  baseline_fft:
     checkpoint_dir: "./exp/siglip2_peft/ucf101/baseline_fft"
+    log_file: "./exp/siglip2_peft/ucf101/baseline_fft/session.log"
+    
+    unfreeze_backbone: true     # Mở khóa toàn bộ SigLIP
+    prompt_type: "manual"
+    manual_prompt_template: "A video of a person performing {}"
+    cocoop_hidden_dim: 512
+    
+    lora_r: 0
+    lora_alpha: 0.0
+    lora_dropout: 0.0
+    lora_target_modules: []
+
+    batch_size: 8               
+    accumulation_steps: 4       # 8 * 4 = 32 effective batch size
+    
+    lr_base: 1.0e-6             # LR cực nhỏ để bảo vệ Backbone
+    lr_head: 1.0e-4             
+    weight_decay: 0.01          
+    
+    num_epochs: 30              
+    warmup_epochs: 5            # Cực kỳ quan trọng với FFT để tránh "sốc gradient"
+    early_stopping_patience: 5
+
+  zero_shot_baseline_no_lora:
+    # Trỏ về cùng thư mục để nó tìm thấy file log và ma trận nhầm lẫn (confusion matrix)
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/baseline_no_lora" 
+    
+    # Giữ nguyên cấu trúc mạng như lúc train để load weight không bị lỗi
+    unfreeze_backbone: false
+    prompt_type: "manual"
+    manual_prompt_template: "A video of a person performing {}"
+    cocoop_hidden_dim: 512
+    
+    lora_r: 0
+    lora_alpha: 0.0
+    lora_dropout: 0.0
+    lora_target_modules: []
+
+    batch_size: 32  exp/siglip2_peft/ucf101/baseline_fft"
     log_file: "./exp/siglip2_peft/ucf101/baseline_fft/session.log"
     
     unfreeze_backbone: true     # Mở khóa toàn bộ SigLIP

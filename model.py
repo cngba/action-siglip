@@ -171,10 +171,12 @@ class Siglip2ActionModel(nn.Module):
         base_v = spatial_features_norm.mean(dim=1)
         temporal_v = self.temporal_module(spatial_features) 
         
-        if is_zero_shot:
-            v = base_v
-        else:
-            v = base_v + self.gamma * temporal_v
+        # if is_zero_shot:
+        #     v = base_v
+        # else:
+        #     v = base_v + self.gamma * temporal_v
+
+        v = base_v + self.gamma * temporal_v
 
         v_norm = F.normalize(v, p=2, dim=-1)
         
