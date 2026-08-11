@@ -25,7 +25,9 @@ class SSv2VideoDataset(Dataset):
         mode: str = 'train',
         num_frames: int = 8,
         prompt_template: str = "A video of a person {}", 
-        allowed_classes=None
+        allowed_classes=None,
+        setting: str = 'fully_supervised',
+        split_file_path: str = None
     ):
         self.prompt_template = prompt_template
         self.allowed_classes = allowed_classes
@@ -34,6 +36,8 @@ class SSv2VideoDataset(Dataset):
         self.processor = processor
         self.mode = mode if mode in ['train', 'val', 'test'] else 'train'
         self.num_frames = num_frames
+        self.setting = setting             
+        self.split_file_path = split_file_path
         
         # Step 1: Build the class-name to label-id mapping from labels.json
         self.label_to_id, self.id_to_label = self._build_class_mappings()
@@ -81,6 +85,50 @@ class SSv2VideoDataset(Dataset):
         return label_to_id, id_to_label
 
     def _load_split(self):
+        # =========================================================
+        # [NEW LOGIC] - CHẾ ĐỘ BASE-TO-NOVEL VÀ FEW-SHOT CHO SSV2
+        # =========================================================
+        if self.setting in ['base2novel', 'few_shot'] and self.split_file_path:
+            if not os.path.exists(self.split_file_path):
+                raise FileNotFoundError(f"Missing split file at: {self.split_file_path}")
+
+            # 1. Đọc JSON gốc để lấy từ điển ánh xạ (Video ID -> Template)
+            id_to_template = {}
+            for json_name in ['train.json', 'validation.json']:
+                jpath = os.path.join(self.annotation_dir, json_name)
+                if os.path.exists(jpath):
+                    with open(jpath, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        for entry in data:
+                            # Xóa ngoặc vuông khỏi template (VD: [Slapping] -> Slapping)
+                            id_to_template[str(entry['id'])] = entry['template'].replace('[', '').replace(']', '')
+
+            # 2. Đọc file txt và đối chiếu để lấy nhãn
+            video_list = []
+            with open(self.split_file_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line: continue
+                    parts = line.split()
+                    
+                    # Trích xuất mã ID chuẩn xác
+                    raw_vid = parts[0].replace('.webm', '') 
+                    
+                    if raw_vid in id_to_template:
+                        template_name = id_to_template[raw_vid]
+                        if template_name in self.label_to_id:
+                            # Lọc theo target_classes nếu có
+                            if self.allowed_classes is not None and len(self.allowed_classes) > 0:
+                                if template_name not in self.allowed_classes:
+                                    continue
+                            label_id = self.label_to_id[template_name]
+                            video_list.append((raw_vid, label_id, template_name))
+
+            logger.info(f"Loaded {len(video_list)} SSv2 videos for setting '{self.setting}' from {self.split_file_path}.")
+            return video_list
+        # =========================================================
+        # [OLD LOGIC] - CHẾ ĐỘ FULLY SUPERVISED (GIỮ NGUYÊN)
+        # =========================================================
         """Loads train.json, validation.json, or test.json."""
         file_map = {
             'train': 'train.json',
