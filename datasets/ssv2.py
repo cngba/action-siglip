@@ -92,18 +92,6 @@ class SSv2VideoDataset(Dataset):
             if not os.path.exists(self.split_file_path):
                 raise FileNotFoundError(f"Missing split file at: {self.split_file_path}")
 
-            # 1. Đọc JSON gốc để lấy từ điển ánh xạ (Video ID -> Template)
-            id_to_template = {}
-            for json_name in ['train.json', 'validation.json']:
-                jpath = os.path.join(self.annotation_dir, json_name)
-                if os.path.exists(jpath):
-                    with open(jpath, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                        for entry in data:
-                            # Xóa ngoặc vuông khỏi template (VD: [Slapping] -> Slapping)
-                            id_to_template[str(entry['id'])] = entry['template'].replace('[', '').replace(']', '')
-
-            # 2. Đọc file txt và đối chiếu để lấy nhãn
             video_list = []
             with open(self.split_file_path, 'r', encoding='utf-8') as f:
                 for line in f:
@@ -111,18 +99,20 @@ class SSv2VideoDataset(Dataset):
                     if not line: continue
                     parts = line.split()
                     
-                    # Trích xuất mã ID chuẩn xác
+                    # 1. Trích xuất ID và Label ID thẳng từ file txt
                     raw_vid = parts[0].replace('.webm', '') 
+                    label_id = int(parts[1])
                     
-                    if raw_vid in id_to_template:
-                        template_name = id_to_template[raw_vid]
-                        if template_name in self.label_to_id:
-                            # Lọc theo target_classes nếu có
-                            if self.allowed_classes is not None and len(self.allowed_classes) > 0:
-                                if template_name not in self.allowed_classes:
-                                    continue
-                            label_id = self.label_to_id[template_name]
-                            video_list.append((raw_vid, label_id, template_name))
+                    # 2. Tra ngược ID để lấy Template Name
+                    if label_id in self.id_to_label:
+                        template_name = self.id_to_label[label_id]
+                        
+                        # 3. Lọc theo target_classes (nếu có)
+                        if self.allowed_classes is not None and len(self.allowed_classes) > 0:
+                            if template_name not in self.allowed_classes:
+                                continue
+                        
+                        video_list.append((raw_vid, label_id, template_name))
 
             logger.info(f"Loaded {len(video_list)} SSv2 videos for setting '{self.setting}' from {self.split_file_path}.")
             return video_list

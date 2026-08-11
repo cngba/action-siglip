@@ -283,6 +283,8 @@ if __name__ == "__main__":
 
     dataset_setting = config.get("setting", "fully_supervised")
 
+    target_mode = "val" if dataset_name in ["ssv2", "something-something-v2"] else "test"
+
     # Build dataset kwargs dynamically
     dataset_kwargs = {
         "base_dir": config["base_dir"],
@@ -606,9 +608,9 @@ if __name__ == "__main__":
         "annotation_dir": config["annotation_dir"],
         "processor": processor,
         "num_frames": config["num_frames"],
-        "mode": "test",
+        "mode": "test",  # Giữ chuẩn mode là test
         "prompt_template": config.get("manual_prompt_template", "A video of a person performing {}"),
-        "allowed_classes": target_classes,
+        "allowed_classes": target_classes
     }
 
     # Pass split parameter only if supported
@@ -620,17 +622,17 @@ if __name__ == "__main__":
         splits_dir = config.get("splits_dir", config["annotation_dir"])
         split_target_file = config.get("val_novel", "novel_val.txt") if is_zs_mode else config.get("val_base", "base_val.txt")
         file_path = os.path.join(splits_dir, split_target_file)
-        
         val_dataset = ActionDataset(setting='base2novel', split_file_path=file_path, **dataset_kwargs)
         
-    elif dataset_setting == 'few_shot':
-        # [NEW]: Lúc test Few-shot, ta không đọc val1.txt nữa mà nhảy thẳng về Fully Supervised
-        # để code cũ tự động đọc `testlist01.txt` (nếu split: 1)
-        val_dataset = ActionDataset(setting='fully_supervised', **dataset_kwargs)
-        
-    else:
-        # Code gốc của bạn (Fully Supervised)
-        val_dataset = ActionDataset(setting='fully_supervised', **dataset_kwargs)
+    elif dataset_setting == 'few_shot' or dataset_setting == 'fully_supervised':
+        if dataset_name in ["ssv2", "something-something-v2"]:
+            # [SSV2]: Bắt buộc nạp file test_with_labels.txt thông qua cờ few_shot
+            splits_dir = config.get("splits_dir", config["annotation_dir"])
+            file_path = os.path.join(splits_dir, "test_with_labels.txt")
+            val_dataset = ActionDataset(setting='few_shot', split_file_path=file_path, **dataset_kwargs)
+        else:
+            # [UCF101]: Tự động kích hoạt luồng cũ đọc testlist01.txt
+            val_dataset = ActionDataset(setting='fully_supervised', **dataset_kwargs)
     
     g_val = torch.Generator()
     g_val.manual_seed(config["seed"])

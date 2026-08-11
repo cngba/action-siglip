@@ -282,10 +282,11 @@ def main():
         train_file = os.path.join(splits_dir, config.get("train_few_shot", "train_16_shot.txt"))
         val_file = os.path.join(splits_dir, config.get("val_few_shot", "val1.txt"))
         
-        # Train: Chỉ học trên file K-shot
+        # Train: Học trên file K-shot
         train_dataset = ActionDataset(mode='train', setting='few_shot', split_file_path=train_file, **dataset_kwargs)
-        # Val: Trong Few-shot, ta đánh giá chéo trên toàn bộ tập Test chuẩn
-        val_dataset = ActionDataset(mode='test', setting='fully_supervised', **dataset_kwargs)
+        
+        # [CHỐNG LEAKAGE]: Đánh giá bằng file val1.txt/validation.txt để Early Stopping
+        val_dataset = ActionDataset(mode='val', setting='few_shot', split_file_path=val_file, **dataset_kwargs)
         
     else:
         # Code gốc của bạn (Fully Supervised)
@@ -472,11 +473,14 @@ def main():
 
         epoch_time = time.time() - start_time # Kết thúc bấm giờ (giây)
 
+        logger.info(f"Metrics dict contents: {metrics}")
+
         logger.info(f"Epoch Time: {epoch_time:.2f}s | Peak VRAM: {peak_vram:.2f} GB")
         logger.info(f"Epoch Summary -> Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.2f}%")
         logger.info(f"Val Summary   -> Val Loss: {val_loss:.4f} | Top-1: {metrics['top1']:.2f}% | Top-5: {metrics['top5']:.2f}%")
 
         current_lr = optimizer.param_groups[0]['lr']
+        
         if wandb is not None:
             wandb.log({
                 "epoch": epoch,

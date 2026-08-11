@@ -18,7 +18,7 @@ data:
   # --- THÊM CONFIG CHO CHẾ ĐỘ BASE-TO-NOVEL TẠI ĐÂY ---
   setting: "few_shot"                      # Chuyển mode thành base2novel
   splits_dir: "/root/action-siglip/datasets_splits/ssv2_splits"    # Thư mục chứa 3 file .txt của tc-clip
-  train_few_shot: "train1_few_shot_16.txt"
+  train_few_shot: "train1_few_shot_2.txt"
   val_few_shot: "validation.txt"
 
 # ==============================================================================
