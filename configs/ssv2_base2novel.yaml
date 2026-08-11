@@ -19,6 +19,7 @@ data:
   setting: "base2novel"                      # Chuyển mode thành base2novel
   splits_dir: "/root/action-siglip/datasets_splits/base2novel_splits/ssv2_splits"    # Thư mục chứa 3 file .txt của tc-clip
   train_base: "base_train.txt"               # Dùng cho train.py
+  # có thể chọn fs_base_s<id>_train.txt thay vì base_train.txt để chống overfit 
   val_base: "base_val.txt"                   # Dùng cho validation trong train.py
   val_novel: "novel_val.txt"                 # Dùng cho test.py (Zero-shot)
 
