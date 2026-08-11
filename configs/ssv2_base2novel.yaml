@@ -1,0 +1,255 @@
+# ==============================================================================
+# Global Configuration 
+# ==============================================================================
+model_name: "google/siglip2-base-patch16-224"
+seed: 1234
+
+# ==============================================================================
+# 1. CẤU HÌNH DỮ LIỆU (VISION BRANCH)
+# ==============================================================================
+data:
+  dataset: "ssv2"
+  base_dir: "/root/data/20bn-something-something-v2"                  # Location containing *.webm files
+  annotation_dir: "/root/data/labels"     # Location containing labels.json, train.json, validation.json
+  split: 1                                # Ignored for SSv2
+  num_segments: 8
+  workers: 8
+  
+  # --- THÊM CONFIG CHO CHẾ ĐỘ BASE-TO-NOVEL TẠI ĐÂY ---
+  setting: "base2novel"                      # Chuyển mode thành base2novel
+  splits_dir: "/root/action-siglip/datasets_splits/base2novel_splits/ssv2_splits"    # Thư mục chứa 3 file .txt của tc-clip
+  train_base: "base_train.txt"               # Dùng cho train.py
+  val_base: "base_val.txt"                   # Dùng cho validation trong train.py
+  val_novel: "novel_val.txt"                 # Dùng cho test.py (Zero-shot)
+
+# ==============================================================================
+# 2. TỪ VỰNG CHO ZERO-SHOT (TEXT BRANCH)
+# Chú ý: Đây là phần BẮT BUỘC để SigLIP sinh Text Embeddings chính xác
+# ==============================================================================
+zero_shot_splits:
+  seen_class_names:
+    - "Pouring something into something"
+    - "Throwing something onto a surface"
+    - "Moving something away from the camera"
+    - "Dropping something in front of something"
+    - "Dropping something into something"
+    - "Removing something, revealing something behind"
+    - "Moving something closer to something"
+    - "Pretending to close something without actually closing it"
+    - "Moving something away from something"
+    - "Pretending to throw something"
+    - "Showing something on top of something"
+    - "Pretending to take something out of something"
+    - "Tilting something with something on it until it falls off"
+    - "Scooping something up with something"
+    - "Throwing something in the air and catching it"
+    - "Putting number of something onto something"
+    - "Pushing something so that it almost falls off but doesn't"
+    - "Folding something"
+    - "Picking something up"
+    - "Dropping something next to something"
+    - "Putting something, something and something on the table"
+    - "Holding something behind something"
+    - "Turning the camera right while filming something"
+    - "Turning the camera left while filming something"
+    - "Stacking number of something"
+    - "Taking something from somewhere"
+    - "Pretending to put something into something"
+    - "Closing something"
+    - "Spinning something that quickly stops spinning"
+    - "Moving away from something with your camera"
+    - "Something falling like a feather or paper"
+    - "Putting something and something on the table"
+    - "Dropping something onto something"
+    - "Approaching something with your camera"
+    - "Plugging something into something"
+    - "Pretending to put something next to something"
+    - "Pretending to take something from somewhere"
+    - "Putting something behind something"
+    - "Showing that something is inside something"
+    - "Opening something"
+    - "Throwing something against something"
+    - "Rolling something on a flat surface"
+    - "Holding something over something"
+    - "Tearing something just a little bit"
+    - "Poking something so it slightly moves"
+    - "Stuffing something into something"
+    - "Something falling like a rock"
+    - "Pretending to put something on a surface"
+    - "Holding something next to something"
+    - "Lifting up one end of something without letting it drop down"
+    - "Pushing something with something"
+    - "Holding something"
+    - "Touching (without moving) part of something"
+    - "Pretending to open something without actually opening it"
+    - "Lifting something with something on it"
+    - "Moving something and something away from each other"
+    - "Pretending to pick something up"
+    - "Pulling something from left to right"
+    - "Moving something and something closer to each other"
+    - "Pulling something from right to left"
+    - "Lifting something up completely, then letting it drop down"
+    - "Lifting up one end of something, then letting it drop down"
+    - "Putting something onto something"
+    - "Showing that something is empty"
+    - "Lifting something up completely without letting it drop down"
+    - "Showing something behind something"
+    - "Pushing something so that it falls off the table"
+    - "Taking something out of something"
+    - "Tearing something into two pieces"
+    - "Hitting something with something"
+    - "Putting something similar to other things that are already on the table"
+    - "Holding something in front of something"
+    - "Pushing something so that it slightly moves"
+    - "Squeezing something"
+    - "Putting something next to something"
+    - "Turning something upside down"
+    - "Poking something so lightly that it doesn't or almost doesn't move"
+    - "Putting something into something"
+    - "Throwing something"
+    - "Taking one of many similar things on the table"
+    - "Uncovering something"
+    - "Pushing something from right to left"
+    - "Covering something with something"
+    - "Moving something down"
+    - "Pushing something from left to right"
+    - "Moving something up"
+    - "Putting something on a surface"
+
+  unseen_class_names:
+    - "Poking a hole into some substance"
+    - "Spilling something behind something"
+    - "Poking something so that it spins around"
+    - "Putting something onto a slanted surface but it doesn't glide down"
+    - "Spilling something next to something"
+    - "Pretending to spread air onto something"
+    - "Trying to pour something into something, but missing so it spills next to it"
+    - "Poking a hole into something soft"
+    - "Pulling two ends of something so that it separates into two pieces"
+    - "Poking a stack of something without the stack collapsing"
+    - "Lifting a surface with something on it but not enough for it to slide down"
+    - "Pouring something into something until it overflows"
+    - "Twisting (wringing) something wet until water comes out"
+    - "Spilling something onto something"
+    - "Failing to put something into something because something does not fit"
+    - "Pouring something onto something"
+    - "Pulling something onto something"
+    - "Poking a stack of something so the stack collapses"
+    - "Pulling two ends of something so that it gets stretched"
+    - "Pretending or trying and failing to twist something"
+    - "Pouring something out of something"
+    - "Pretending to pour something out of something, but something is empty"
+    - "Lifting a surface with something on it until it starts sliding down"
+    - "Pretending or failing to wipe something off of something"
+    - "Pretending to scoop something up with something"
+    - "Tipping something with something in it over, so something in it falls out"
+    - "Something being deflected from something"
+    - "Pretending to put something underneath something"
+    - "Letting something roll up a slanted surface, so it rolls back down"
+    - "Pushing something onto something"
+    - "Putting something that can't roll onto a slanted surface, so it stays where it is"
+    - "Putting something onto something else that cannot support it so it falls down"
+    - "Putting something that can't roll onto a slanted surface, so it slides down"
+    - "Putting something on a flat surface without letting it roll"
+    - "Sprinkling something onto something"
+    - "Pretending to sprinkle air onto something"
+    - "Spreading something onto something"
+    - "Tipping something over"
+    - "Something colliding with something and both come to a halt"
+    - "Digging something out of something"
+    - "Pulling something from behind of something"
+    - "Something colliding with something and both are being deflected"
+    - "Moving something and something so they collide with each other"
+    - "Trying but failing to attach something to something because it doesn't stick"
+    - "Bending something until it breaks"
+    - "Pulling two ends of something but nothing happens"
+    - "Bending something so that it deforms"
+    - "Moving something and something so they pass each other"
+    - "Putting something on the edge of something so it is not supported and falls down"
+    - "Pretending to poke something"
+    - "Pushing something off of something"
+    - "Wiping something off of something"
+    - "Pulling something out of something"
+    - "Pushing something so it spins"
+    - "Putting something that cannot actually stand upright upright on the table, so it falls on its side"
+    - "Burying something in something"
+    - "Tilting something with something on it slightly so it doesn't fall down"
+    - "Putting something underneath something"
+    - "Moving part of something"
+    - "Letting something roll down a slanted surface"
+    - "Pretending to put something onto something"
+    - "Plugging something into something but pulling it right out as you remove your hand"
+    - "Poking something so that it falls over"
+    - "Moving something across a surface without it falling down"
+    - "Moving something across a surface until it falls down"
+    - "Laying something on the table on its side, not upright"
+    - "Pretending to put something behind something"
+    - "Showing something to the camera"
+    - "Pretending to squeeze something"
+    - "Twisting something"
+    - "Pretending to turn something upside down"
+    - "Putting something upright on the table"
+    - "Spinning something so it continues spinning"
+    - "Trying to bend something unbendable so nothing happens"
+    - "Throwing something in the air and letting it fall"
+    - "Dropping something behind something"
+    - "Letting something roll along a flat surface"
+    - "Piling something up"
+    - "Pretending to be tearing something that is not tearable"
+    - "Showing something next to something"
+    - "Attaching something to something"
+    - "Putting something in front of something"
+    - "Showing a photo of something to the camera"
+    - "Unfolding something"
+    - "Turning the camera upwards while filming something"
+    - "Moving something towards the camera"
+    - "Turning the camera downwards while filming something"
+
+# ==============================================================================
+# 3. CÁC MODE HUẤN LUYỆN
+# ==============================================================================
+modes:
+
+  # ---------------------------------------------------------
+  # BASELINE 1: NO LORA (Frozen Base + Train Custom Heads)
+  # ---------------------------------------------------------
+
+  baseline_with_lora:
+    checkpoint_dir: "./exp/siglip2_peft/ssv2/baseline_with_lora"
+    log_file: "./exp/siglip2_peft/ssv2/baseline_with_lora/session.log"
+    
+    unfreeze_backbone: false
+    prompt_type: "manual"
+    manual_prompt_template: "a video of a person {}"
+    cocoop_hidden_dim: 512
+    
+    lora_r: 16                   
+    lora_alpha: 16.0            
+    lora_dropout: 0.05          
+    lora_target_modules: ["q_proj", "v_proj"]
+
+    batch_size: 32              
+    accumulation_steps: 1       
+    
+    lr_base: 5.0e-5             
+    lr_head: 1.0e-3             
+    weight_decay: 0.05          
+    
+    num_epochs: 12              
+    warmup_epochs: 2            
+    early_stopping_patience: 3  
+
+  zero_shot_baseline_with_lora:
+    checkpoint_dir: "./exp/siglip2_peft/ssv2/baseline_with_lora" 
+    
+    unfreeze_backbone: false
+    prompt_type: "manual"
+    manual_prompt_template: "a video of a person {}"
+    cocoop_hidden_dim: 512
+    
+    lora_r: 16                   
+    lora_alpha: 16.0            
+    lora_dropout: 0.05          
+    lora_target_modules: ["q_proj", "v_proj"]
+
+    batch_size: 32

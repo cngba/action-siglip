@@ -138,36 +138,6 @@ zero_shot_splits:
 # ==============================================================================
 modes:
 
-  # ---------------------------------------------------------
-  # BASELINE 1: NO LORA (Frozen Base + Train Custom Heads)
-  # ---------------------------------------------------------
-  baseline_no_lora:
-    checkpoint_dir: "./exp/siglip2_peft/ucf101/baseline_no_lora"
-    log_file: "./exp/siglip2_peft/ucf101/baseline_no_lora/session.log"
-
-    loss_type: "contrastive"
-    
-    unfreeze_backbone: false
-    prompt_type: "manual"
-    manual_prompt_template: "{}"
-    cocoop_hidden_dim: 512
-    
-    lora_r: 0
-    lora_alpha: 0.0
-    lora_dropout: 0.0
-    lora_target_modules: []
-
-    batch_size: 16              
-    accumulation_steps: 2       
-    
-    lr_base: 0.0                
-    lr_head: 1.0e-3             
-    weight_decay: 0.05          
-    
-    num_epochs: 12              
-    warmup_epochs: 2            # Sử dụng Linear Warmup trong 5 epochs đầu
-    early_stopping_patience: 3  
-
   baseline_with_lora:
     checkpoint_dir: "./exp/siglip2_peft/ucf101/baseline_with_lora"
     log_file: "./exp/siglip2_peft/ucf101/baseline_with_lora/session.log"
@@ -208,21 +178,4 @@ modes:
     lora_dropout: 0.05          
     lora_target_modules: ["q_proj", "v_proj"]
 
-    batch_size: 32
-
-  zero_shot_baseline_no_lora:
-    # Trỏ về cùng thư mục để nó tìm thấy file log và ma trận nhầm lẫn (confusion matrix)
-    checkpoint_dir: "./exp/siglip2_peft/ucf101/baseline_no_lora" 
-    
-    # Giữ nguyên cấu trúc mạng như lúc train để load weight không bị lỗi
-    unfreeze_backbone: false
-    prompt_type: "manual"
-    manual_prompt_template: "{}"
-    cocoop_hidden_dim: 512
-    
-    lora_r: 0
-    lora_alpha: 0.0
-    lora_dropout: 0.0
-    lora_target_modules: []
-
-    batch_size: 32              
+    batch_size: 32           
