@@ -1,3 +1,4 @@
+# action-siglip/datasets/ssv2.py
 import os
 import json
 import torch
@@ -88,9 +89,9 @@ class SSv2VideoDataset(Dataset):
         # =========================================================
         # [NEW LOGIC] - CHẾ ĐỘ BASE-TO-NOVEL VÀ FEW-SHOT CHO SSV2
         # =========================================================
-        if self.setting in ['base2novel', 'few_shot'] and self.split_file_path:
-            if not os.path.exists(self.split_file_path):
-                raise FileNotFoundError(f"Missing split file at: {self.split_file_path}")
+        if self.split_file_path and os.path.exists(self.split_file_path):
+            print("\n" + "🔥"*30)
+            print(f"👉 [SSV2 - {self.mode.upper()}] ĐANG NẠP DỮ LIỆU TỪ FILE:")
 
             video_list = []
             with open(self.split_file_path, 'r', encoding='utf-8') as f:
@@ -114,6 +115,7 @@ class SSv2VideoDataset(Dataset):
                         
                         video_list.append((raw_vid, label_id, template_name))
 
+            # SỬA Ở ĐÂY: Thụt lề 2 dòng này vào bên trong khối lệnh 'if'
             logger.info(f"Loaded {len(video_list)} SSv2 videos for setting '{self.setting}' from {self.split_file_path}.")
             return video_list
         # =========================================================

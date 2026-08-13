@@ -559,6 +559,9 @@ if __name__ == "__main__":
         "splits_dir": raw_yaml["data"].get("splits_dir", ""),
         "val_base": raw_yaml["data"].get("val_base", "base_val.txt"),
         "val_novel": raw_yaml["data"].get("val_novel", "novel_val.txt"),
+
+        "train_few_shot": raw_yaml["data"].get("train_few_shot", "train1_few_shot_16.txt"),
+        "val_few_shot": raw_yaml["data"].get("val_few_shot", "val1.txt")
     }
     
     mode_specific_config = raw_yaml["modes"][args.mode]
@@ -608,7 +611,7 @@ if __name__ == "__main__":
         "annotation_dir": config["annotation_dir"],
         "processor": processor,
         "num_frames": config["num_frames"],
-        "mode": "test",  # Giữ chuẩn mode là test
+        "mode": target_mode,  # Giữ chuẩn mode là test
         "prompt_template": config.get("manual_prompt_template", "A video of a person performing {}"),
         "allowed_classes": target_classes
     }
@@ -619,19 +622,26 @@ if __name__ == "__main__":
 
     # --- KHỞI TẠO DATASET DỰA TRÊN SETTING ---
     if dataset_setting == 'base2novel':
-        splits_dir = config.get("splits_dir", config["annotation_dir"])
+        # Base2Novel cũng có thể dùng test_splits_dir nếu muốn
+        eval_splits_dir = config.get("test_splits_dir", config.get("splits_dir", config["annotation_dir"]))
         split_target_file = config.get("val_novel", "novel_val.txt") if is_zs_mode else config.get("val_base", "base_val.txt")
-        file_path = os.path.join(splits_dir, split_target_file)
+        file_path = os.path.join(eval_splits_dir, split_target_file)
         val_dataset = ActionDataset(setting='base2novel', split_file_path=file_path, **dataset_kwargs)
         
-    elif dataset_setting == 'few_shot' or dataset_setting == 'fully_supervised':
-        if dataset_name in ["ssv2", "something-something-v2"]:
-            # [SSV2]: Bắt buộc nạp file test_with_labels.txt thông qua cờ few_shot
-            splits_dir = config.get("splits_dir", config["annotation_dir"])
-            file_path = os.path.join(splits_dir, "test_with_labels.txt")
-            val_dataset = ActionDataset(setting='few_shot', split_file_path=file_path, **dataset_kwargs)
+    elif dataset_setting == 'few_shot':
+        eval_splits_dir = config.get("test_splits_dir", config.get("splits_dir", config["annotation_dir"]))
+        split_target_file = config.get("val_few_shot", "val1.txt") 
+        file_path = os.path.join(eval_splits_dir, split_target_file)
+        val_dataset = ActionDataset(setting='few_shot', split_file_path=file_path, **dataset_kwargs)
+        
+    else: # fully_supervised
+        test_file = config.get("test_file", None)
+        if test_file:
+            eval_splits_dir = config.get("test_splits_dir", config.get("splits_dir", config["annotation_dir"]))
+            file_path = os.path.join(eval_splits_dir, test_file)
+            val_dataset = ActionDataset(setting='fully_supervised', split_file_path=file_path, **dataset_kwargs)
         else:
-            # [UCF101]: Tự động kích hoạt luồng cũ đọc testlist01.txt
+            # Luồng tiêu chuẩn mặc định (Ví dụ: UCF101)
             val_dataset = ActionDataset(setting='fully_supervised', **dataset_kwargs)
     
     g_val = torch.Generator()
