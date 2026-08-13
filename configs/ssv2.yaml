@@ -1,5 +1,5 @@
 model_name: "google/siglip2-base-patch16-224"
-seed: 42
+seed: 109
 
 data:
   dataset: "ssv2"
