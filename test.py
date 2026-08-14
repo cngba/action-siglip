@@ -684,9 +684,10 @@ if __name__ == "__main__":
     model = Siglip2ActionModel(
         model_name=config["model_name"], 
         class_names=class_list,
-        manual_prompt_template=config["manual_prompt_template"],
+        manual_prompt_template=config.get("manual_prompt_template", "A video of a person performing {}"),
         lora_config=lora_config,
-        unfreeze_backbone=config.get("unfreeze_backbone", False)
+        unfreeze_backbone=config.get("unfreeze_backbone", False),
+        use_mean_pooling=config.get("use_mean_pooling", False) # [THÊM MỚI]
     ).to(device)
 
     current_epoch = 0

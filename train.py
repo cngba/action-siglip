@@ -346,7 +346,8 @@ def main():
         class_names=class_names_list,
         manual_prompt_template=config.get("manual_prompt_template", "A video of a person performing {}"),
         lora_config=lora_config,
-        unfreeze_backbone=config.get("unfreeze_backbone", False)
+        unfreeze_backbone=config.get("unfreeze_backbone", False),
+        use_mean_pooling=config.get("use_mean_pooling", False) # [THÊM MỚI]
     )
     
     # NEW: Automatically utilize multiple A100s if allocated by Slurm
@@ -393,7 +394,7 @@ def main():
             continue
         if "lora" in n:
             lora_params.append(p)
-        elif "temporal" in n or "gamma" in n:
+        elif "temporal" in n or "gamma" in n or "mean_pool_proj" in n:
             custom_head_params.append(p)
         else:
             other_params.append(p)

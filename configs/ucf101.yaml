@@ -220,3 +220,29 @@ modes:
     num_epochs: 30              
     warmup_epochs: 5            # Cực kỳ quan trọng với FFT để tránh "sốc gradient"
     early_stopping_patience: 5
+
+  baseline_mean_pooling:
+    checkpoint_dir: "./exp/siglip2_peft/ucf101/baseline_no_lora"
+    log_file: "./exp/siglip2_peft/ucf101/baseline_no_lora/session.log"
+    
+    use_mean_pooling: True
+    unfreeze_backbone: false
+    prompt_type: "manual"
+    manual_prompt_template: "A video of a person performing {}"
+    cocoop_hidden_dim: 512
+    
+    lora_r: 0
+    lora_alpha: 0.0
+    lora_dropout: 0.0
+    lora_target_modules: []
+
+    batch_size: 16              
+    accumulation_steps: 2       
+    
+    lr_base: 0.0                
+    lr_head: 1.0e-3             
+    weight_decay: 0.05          
+    
+    num_epochs: 30              
+    warmup_epochs: 5            # Sử dụng Linear Warmup trong 5 epochs đầu
+    early_stopping_patience: 5
