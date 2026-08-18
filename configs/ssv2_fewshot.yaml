@@ -1,3 +1,5 @@
+# configs/ssv2_fewshot.yaml
+
 # ==============================================================================
 # Global Configuration 
 # ==============================================================================
@@ -127,8 +129,8 @@ modes:
     early_stopping_patience: 5 
 
   test_few_shot_2:
-    checkpoint_dir: "./exp/siglip2_peft/ucf101/test_few_shot_2"
-    log_file: "./exp/siglip2_peft/ucf101/test_few_shot_2/session.log"
+    checkpoint_dir: "./exp/siglip2_peft/ssv2/test_few_shot_2"
+    log_file: "./exp/siglip2_peft/ssv2/test_few_shot_2/session.log"
 
     unfreeze_backbone: false
     prompt_type: "manual"
@@ -144,8 +146,8 @@ modes:
     accumulation_steps: 2
 
   test_few_shot_4:
-    checkpoint_dir: "./exp/siglip2_peft/ucf101/test_few_shot_4"
-    log_file: "./exp/siglip2_peft/ucf101/test_few_shot_4/session.log"
+    checkpoint_dir: "./exp/siglip2_peft/ssv2/test_few_shot_4"
+    log_file: "./exp/siglip2_peft/ssv2/test_few_shot_4/session.log"
 
     unfreeze_backbone: false
     prompt_type: "manual"
@@ -161,8 +163,8 @@ modes:
     accumulation_steps: 2  
 
   test_few_shot_8:
-    checkpoint_dir: "./exp/siglip2_peft/ucf101/test_few_shot_8"
-    log_file: "./exp/siglip2_peft/ucf101/test_few_shot_8/session.log"
+    checkpoint_dir: "./exp/siglip2_peft/ssv2/test_few_shot_8"
+    log_file: "./exp/siglip2_peft/ssv2/test_few_shot_8/session.log"
 
     unfreeze_backbone: false
     prompt_type: "manual"
@@ -178,8 +180,8 @@ modes:
     accumulation_steps: 2
 
   test_few_shot_16:
-    checkpoint_dir: "./exp/siglip2_peft/ucf101/test_few_shot_16"
-    log_file: "./exp/siglip2_peft/ucf101/test_few_shot_16/session.log"
+    checkpoint_dir: "./exp/siglip2_peft/ssv2/test_few_shot_16"
+    log_file: "./exp/siglip2_peft/ssv2/test_few_shot_16/session.log"
 
     unfreeze_backbone: false
     prompt_type: "manual"

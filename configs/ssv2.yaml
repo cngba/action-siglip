@@ -1,3 +1,5 @@
+# configs/ssv2.yaml
+
 model_name: "google/siglip2-base-patch16-224"
 seed: 42
 
