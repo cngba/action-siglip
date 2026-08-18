@@ -78,7 +78,8 @@ class Siglip2ActionModel(nn.Module):
         class_names: list, 
         manual_prompt_template: str,
         lora_config: LoraConfig,
-        unfreeze_backbone: bool = False
+        unfreeze_backbone: bool = False,
+        use_mean_pooling: bool = False
     ):
         super().__init__()
         if class_names is None:
@@ -118,9 +119,18 @@ class Siglip2ActionModel(nn.Module):
         else:
             print("LoRA is disabled (r=0 or empty targets). Base model is fully frozen.")
 
-        self.temporal_module = HybridTemporalModule(dim=embedding_dim)
-        
-        self.gamma = nn.Parameter(torch.ones(1) * 0.1)
+        self.use_mean_pooling = use_mean_pooling
+
+        if self.use_mean_pooling:
+            print("Architecture: Learnable Mean Pooling (Fair Baseline).")
+            self.mean_pool_proj = nn.Linear(embedding_dim, embedding_dim)
+            # Khởi tạo ma trận đơn vị để ban đầu không làm méo feature gốc
+            nn.init.eye_(self.mean_pool_proj.weight)
+            nn.init.zeros_(self.mean_pool_proj.bias)
+        else:
+            print("Architecture: Hybrid Temporal Module (HTM).")
+            self.temporal_module = HybridTemporalModule(dim=embedding_dim)
+            self.gamma = nn.Parameter(torch.ones(1) * 0.1)
 
     def _apply_lora_to_encoder(self, encoder, r, alpha, name, target_modules):
         num_injected = 0
@@ -169,14 +179,20 @@ class Siglip2ActionModel(nn.Module):
         spatial_features_norm = F.normalize(spatial_features, p=2, dim=-1)
 
         base_v = spatial_features_norm.mean(dim=1)
-        temporal_v = self.temporal_module(spatial_features) 
+        # temporal_v = self.temporal_module(spatial_features) 
         
-        # if is_zero_shot:
-        #     v = base_v
-        # else:
-        #     v = base_v + self.gamma * temporal_v
+        # # if is_zero_shot:
+        # #     v = base_v
+        # # else:
+        # #     v = base_v + self.gamma * temporal_v
 
-        v = base_v + self.gamma * temporal_v
+        # v = base_v + self.gamma * temporal_v
+
+        if getattr(self, "use_mean_pooling", False):
+            v = self.mean_pool_proj(base_v) # Dùng Linear Projection
+        else:
+            temporal_v = self.temporal_module(spatial_features) 
+            v = base_v + self.gamma * temporal_v # Dùng HTM
 
         v_norm = F.normalize(v, p=2, dim=-1)
         
