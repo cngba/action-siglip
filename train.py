@@ -63,6 +63,34 @@ def setup_logger(log_file):
     
     return logger
 
+
+def measure_gflops(model, pixel_values, device, logger):
+    """Measures forward-pass computation cost for one real input batch."""
+    activities = [torch.profiler.ProfilerActivity.CPU]
+    if device.type == "cuda":
+        activities.append(torch.profiler.ProfilerActivity.CUDA)
+
+    was_training = model.training
+    model.eval()
+    try:
+        with torch.no_grad():
+            with torch.profiler.profile(activities=activities, with_flops=True) as profile:
+                model(pixel_values, is_zero_shot=False, return_features=False)
+
+        total_flops = sum(event.flops for event in profile.key_averages())
+        gflops_per_batch = total_flops / 1e9
+        gflops_per_sample = gflops_per_batch / pixel_values.shape[0]
+        logger.info(
+            f"Computation Cost -> GFLOPs/batch: {gflops_per_batch:.3f} | "
+            f"GFLOPs/sample: {gflops_per_sample:.3f}"
+        )
+        return gflops_per_batch, gflops_per_sample
+    except (RuntimeError, NotImplementedError) as error:
+        logger.warning(f"Unable to measure GFLOPs: {error}")
+        return None, None
+    finally:
+        model.train(was_training)
+
 class EarlyStopping:
     """Dừng huấn luyện sớm nếu điểm validation không cải thiện sau số epoch chỉ định."""
     def __init__(self, patience=5, min_delta=0.0, mode='max'):
@@ -357,6 +385,12 @@ def main():
         
     model = model.to(device)
 
+    # Measure once per run so computation-cost profiling does not affect epoch timing.
+    sample_batch = next(iter(train_loader))
+    gflops_per_batch, gflops_per_sample = measure_gflops(
+        model, sample_batch["pixel_values"].to(device), device, logger
+    )
+
     if wandb is not None:
         wandb.watch(model, log="gradients", log_freq=100)
 
@@ -493,7 +527,9 @@ def main():
                 "val_top5": metrics["top5"],
                 "val_f1": metrics["f1"],
                 "epoch_time_seconds": epoch_time,
-                "peak_vram_gb": peak_vram
+                "peak_vram_gb": peak_vram,
+                "gflops_per_batch": gflops_per_batch,
+                "gflops_per_sample": gflops_per_sample
             })
 
         state_dict_to_save = model.module.state_dict() if hasattr(model, 'module') else model.state_dict()
