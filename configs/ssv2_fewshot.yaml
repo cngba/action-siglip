@@ -45,8 +45,8 @@ modes:
     batch_size: 32              
     accumulation_steps: 2       
     
-    lr_base: 5.0e-5             
-    lr_head: 1.0e-3             
+    lr_base: 3.0e-4             
+    lr_head: 2.0e-3             
     weight_decay: 0.05          
     
     num_epochs: 50              
@@ -70,8 +70,8 @@ modes:
     batch_size: 32              
     accumulation_steps: 2       
     
-    lr_base: 5.0e-5             
-    lr_head: 1.0e-3             
+    lr_base: 3.0e-4             
+    lr_head: 2.0e-3             
     weight_decay: 0.05          
     
     num_epochs: 50              
@@ -95,8 +95,8 @@ modes:
     batch_size: 32              
     accumulation_steps: 2       
     
-    lr_base: 5.0e-5             
-    lr_head: 1.0e-3             
+    lr_base: 3.0e-4             
+    lr_head: 2.0e-3             
     weight_decay: 0.05          
     
     num_epochs: 50              
@@ -120,8 +120,8 @@ modes:
     batch_size: 32              
     accumulation_steps: 2       
     
-    lr_base: 5.0e-5             
-    lr_head: 1.0e-3             
+    lr_base: 3.0e-4             
+    lr_head: 2.0e-3             
     weight_decay: 0.05          
     
     num_epochs: 50              

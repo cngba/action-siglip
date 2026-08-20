@@ -158,7 +158,7 @@ modes:
     batch_size: 32              
     accumulation_steps: 1       
     
-    lr_base: 5.0e-5             
+    lr_base: 1.0e-4             
     lr_head: 1.0e-3             
     weight_decay: 0.05          
     
