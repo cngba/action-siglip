@@ -23,6 +23,7 @@ import numpy as np
 import time
 import datetime
 from peft import LoraConfig
+from fvcore.nn import FlopCountAnalysis, flop_count_table
 
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -65,32 +66,40 @@ def setup_logger(log_file):
 
 
 def measure_gflops(model, pixel_values, device, logger):
-    """Measures forward-pass computation cost for one real input batch."""
-    activities = [torch.profiler.ProfilerActivity.CPU]
-    if device.type == "cuda":
-        activities.append(torch.profiler.ProfilerActivity.CUDA)
 
     was_training = model.training
     model.eval()
     try:
         with torch.no_grad():
-            with torch.profiler.profile(activities=activities, with_flops=True) as profile:
-                model(pixel_values, is_zero_shot=False, return_features=False)
+            # Tạo bộ đếm phân tích với model và dữ liệu đầu vào thật
+            flops = FlopCountAnalysis(model, pixel_values)
+            
+            # Tắt bớt các cảnh báo không cần thiết của fvcore để log được sạch
+            flops.unsupported_ops_warnings(False)
+            flops.uncalled_modules_warnings(False)
 
-        total_flops = sum(event.flops for event in profile.key_averages())
-        gflops_per_batch = total_flops / 1e9
-        gflops_per_sample = gflops_per_batch / pixel_values.shape[0]
+            total_flops = flops.total()
+            
+            # Chuyển đổi sang đơn vị Giga (1 tỷ phép toán)
+            gflops_per_batch = total_flops / 1e9
+            gflops_per_sample = gflops_per_batch / pixel_values.shape[0]
+
         logger.info(
-            f"Computation Cost -> GFLOPs/batch: {gflops_per_batch:.3f} | "
+            f"Computation Cost (fvcore) -> GFLOPs/batch: {gflops_per_batch:.3f} | "
             f"GFLOPs/sample: {gflops_per_sample:.3f}"
         )
+        
+        # [TÙY CHỌN]: Nếu bạn muốn in ra một bảng chi tiết xem module nào tốn bao nhiêu FLOPs 
+        # (rất hữu ích để đưa vào Phụ lục của luận văn/bài báo), hãy uncomment dòng dưới:
+        # logger.info(f"\n{flop_count_table(flops)}")
+
         return gflops_per_batch, gflops_per_sample
-    except (RuntimeError, NotImplementedError) as error:
-        logger.warning(f"Unable to measure GFLOPs: {error}")
+        
+    except Exception as error:
+        logger.warning(f"Lỗi khi đo GFLOPs bằng fvcore: {error}")
         return None, None
     finally:
         model.train(was_training)
-
 class EarlyStopping:
     """Dừng huấn luyện sớm nếu điểm validation không cải thiện sau số epoch chỉ định."""
     def __init__(self, patience=5, min_delta=0.0, mode='max'):
@@ -378,10 +387,6 @@ def main():
         use_mean_pooling=config.get("use_mean_pooling", False) # [THÊM MỚI]
     )
     
-    # NEW: Automatically utilize multiple A100s if allocated by Slurm
-    if torch.cuda.device_count() > 1:
-        logger.info(f"Multi-GPU detected! Wrapping model in DataParallel using {torch.cuda.device_count()} GPUs.")
-        model = nn.DataParallel(model)
         
     model = model.to(device)
 
@@ -390,6 +395,11 @@ def main():
     gflops_per_batch, gflops_per_sample = measure_gflops(
         model, sample_batch["pixel_values"].to(device), device, logger
     )
+
+    # NEW: Automatically utilize multiple A100s if allocated by Slurm
+    if torch.cuda.device_count() > 1:
+        logger.info(f"Multi-GPU detected! Wrapping model in DataParallel using {torch.cuda.device_count()} GPUs.")
+        model = nn.DataParallel(model)
 
     if wandb is not None:
         wandb.watch(model, log="gradients", log_freq=100)

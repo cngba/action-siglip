@@ -30,7 +30,7 @@ source ./env/bin/activate
 3. **Install the required core dependencies:**
 
 ```bash
-pip install decord scikit-learn opencv-python-headless transformers peft tqdm pillow hf_transfer torch torchvision huggingface_hub wandb
+pip install decord scikit-learn opencv-python-headless transformers peft tqdm pillow hf_transfer torch torchvision huggingface_hub wandb fvcore matplotlib
 
 ```
 
